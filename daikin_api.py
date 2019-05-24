@@ -2,6 +2,8 @@ import logging
 import requests
 import urllib.parse
 
+logger = logging.getLogger(__name__)
+
 class Aircon:
 
     mode = {'' : 'HUMIDIFY',
@@ -17,6 +19,8 @@ class Aircon:
     power = {'0': 'OFF',
              '1': 'ON'}
 
+    MAX_AC_CONSUMPTION = 1200
+
     def __init__(self, num, host):
         self.num = num;
         self.name = 'aircon' + str(num);
@@ -27,16 +31,16 @@ class Aircon:
         self.command_to_send = False;
 
     def api_get(self, path):
-        logging.debug(self.host + path)
-        response = requests.get(self.host + path, timeout=2)
+        logger.debug(self.host + path)
+        response = requests.get(self.host + path, timeout=3)
         return dict(x.split('=') for x in response.text.split(','))
 
     def api_set(self, path, dic):
-        logging.debug(self.host + path)
-        response = requests.get(self.host + path, dic, timeout=2)
+        logger.debug(self.host + path)
+        response = requests.get(self.host + path, dic, timeout=3)
         ret_dic = dict(x.split('=') for x in response.text.split(','))
         if not 'ret' in ret_dic or ret_dic['ret'] != 'OK':
-            logging.error('aircon_api_set returned with ' + response.text)
+            logger.error('aircon_api_set returned with ' + response.text)
         return ret_dic
 
     def get_sensor_info(self):
@@ -51,6 +55,17 @@ class Aircon:
     def get_basic_info(self):
         self.info = self.api_get('/common/basic_info')
         self.name = urllib.parse.unquote(self.info['name'])
+
+    def get_consumption_from_model(self):
+        '''Here we use a possible estimation of what we could get given
+           the indoor and set temperature rather than compressor frequency.
+           This assumes fan setting set to maximum air flow (which we can't check).
+        '''
+        htemp = float(self.sensors['htemp'])
+        stemp = float(self.controls['stemp'])
+        shum = float(self.controls['shum'])
+        # we assume a linear temp / power curve for now
+        return max(stemp + 4 - htemp, 0) * 200 + (200 if shum > 0 else 0)
 
     def get_consumption(self):
         if not (self.sensors and 'cmpfreq' in self.sensors
