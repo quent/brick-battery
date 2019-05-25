@@ -50,7 +50,14 @@ class Aircon:
         self.controls = self.api_get('/aircon/get_control_info')
 
     def set_control_info(self):
-        return self.api_set('/aircon/set_control_info', self.controls)
+        c = self.controls;
+        settings = {'pow': c['pow'], 'mode': c['mode'], 'stemp': c['stemp'], 'shum': c['shum']};
+        logger.info('Setting ' + self.name + ' ' +
+                    Aircon.power[c['pow']] + ' ' +
+                    Aircon.mode[c['mode']] + ' ' +
+                    c['stemp'] + 'ºC, ' +
+                    c['shum'] + '% RH')
+        return self.api_set('/aircon/set_control_info', settings)
 
     def get_basic_info(self):
         self.info = self.api_get('/common/basic_info')

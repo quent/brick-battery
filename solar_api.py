@@ -1,7 +1,7 @@
 import logging
 import uncurl
 
-from requests import Request, Session
+import requests
 
 logger = logging.getLogger(__name__)
 
@@ -12,16 +12,20 @@ class SolarAPI:
         curl_command = curl_file.read()
         curl_file.close()
 
-        self.session = Session()
+        self.session = requests.Session()
         context = uncurl.parse_context(curl_command)
-        request = Request(method=context.method,
-                          url=context.url,
-                          headers=context.headers,
-                          cookies=context.cookies)
+        request = requests.Request(method=context.method,
+                                   url=context.url,
+                                   headers=context.headers,
+                                   cookies=context.cookies)
         self.prepared_request = self.session.prepare_request(request)
 
     def check_se_load(self):
-        response = self.session.send(self.prepared_request)
+        try:
+            response = self.session.send(self.prepared_request)
+        except Exception as e:
+            logger.error('Call to SolarEdge API failed, connection error ' + str(e))
+            return float('NaN')
         if response.status_code == 200:
             json = response.json()
             consumption = int(json['siteCurrentPowerFlow']['GRID']['currentPower'] * 1000)
