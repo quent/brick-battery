@@ -26,6 +26,13 @@ def main():
                                 'currentPowerFlow.curl')
     solar = SolarAPI(current_power_flow_file)
 
+    sleep_mode_settings = {
+        'pow': '1',
+        'mode': '4',
+        'stemp': '22.0',
+        'shum': '0'
+    }
+
     # don't read less often than 3s otherwise SolarEdge drops connection
     bbc = BrickBatteryCharger(ac,
                               solar,
@@ -33,13 +40,14 @@ def main():
                               set_interval=60,
                               min_load = 200,
                               max_load = 1000,
+                              sleep_mode_settings=sleep_mode_settings,
                               dryrun_mode=False)
     bbc.charge()
 
 class BrickBatteryCharger:
 
     def __init__(self, ac, solar, set_interval, read_interval,
-        dryrun_mode, min_load, max_load):
+        min_load, max_load, sleep_mode_settings={}, dryrun_mode=False):
         self.ac = ac
         self.solar = solar
         self.set_interval = set_interval
@@ -48,6 +56,8 @@ class BrickBatteryCharger:
         self.dryrun = dryrun_mode
         self.min_load = min_load
         self.max_load = max_load
+        self.is_sleep_mode = False
+        self.sleep_mode_settings = sleep_mode_settings
 
     def charge(self):
         if self.dryrun:
@@ -59,6 +69,7 @@ class BrickBatteryCharger:
         while True:
             try:
                 self.read_set_loop()
+                time.sleep(self.read_interval)
             except Exception as e:
                 logger.error('Something went wrong, skip this run loop call, cause: %s', e)
          
@@ -212,18 +223,30 @@ class BrickBatteryCharger:
             logger.info('PV generating %dW Exporting %dW', pv_generation, -grid_import)
         else:
             logger.info('PV generating %dW Importing %dW', pv_generation, grid_import)
-        self.load_ac_status()
-        ac_consumption = self.get_ac_consumption()
-        logger.info('Estimated combined A/C consumption %dW', ac_consumption)
-        target = self.calculate_target(grid_import, ac_consumption)
-        logger.info('Target is %d (import in [%d, %d]) next set in %d seconds \n',
-                    target, self.min_load, self.max_load, self.next_set)
-        self.next_set -= self.read_interval
-        if (self.next_set <= 0 and target != 0):
-            self.next_set = self.set_interval
-            logger.info("Setting A/C controls\n")
-            self.set_ac_controls(target)
-        time.sleep(self.read_interval)
+        if pv_generation == 0 and not self.is_sleep_mode:
+            logger.info('PV generation just stopped, entering sleep mode')
+            self.is_sleep_mode = True
+            self.read_interval = self.read_interval * 10
+            for unit in self.ac:
+                unit.controls = self.sleep_mode_settings
+                unit.set_control_info()
+        elif pv_generation > 0 and self.is_sleep_mode:
+            logger.info('PV generation just starting, leaving sleep mode')
+            self.is_sleep_mode = False
+            self.read_interval = self.read_interval / 10
+        elif pv_generation > 0:
+            self.load_ac_status()
+            ac_consumption = self.get_ac_consumption()
+            logger.info('Estimated combined A/C consumption %dW', ac_consumption)
+            target = self.calculate_target(grid_import, ac_consumption)
+            self.next_set -= self.read_interval
+            logger.info('Target is %d (import in [%d, %d]) ' +
+                        ('next set in ' + str(self.next_set) + ' seconds \n' if self.next_set > 0 else 'setting now \n'),
+                        target, self.min_load, self.max_load)
+            if (self.next_set <= 0 and target != 0):
+                self.next_set = self.set_interval
+                logger.info("Setting A/C controls\n")
+                self.set_ac_controls(target)
 
 if __name__ == '__main__':
     main()
