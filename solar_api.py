@@ -3,7 +3,7 @@ import uncurl
 
 import requests
 
-logger = logging.getLogger(__name__)
+LOGGER = logging.getLogger(__name__)
 
 class SolarAPI:
 
@@ -25,7 +25,7 @@ class SolarAPI:
             response = self.session.send(self.prepared_request)
             response.raise_for_status()
         except Exception as e:
-            logger.error('Call to SolarEdge API failed: %s', e)
+            LOGGER.error('Call to SolarEdge API failed: %s', e)
             return float('NaN')
         if response.status_code == 200:
             json = response.json()
@@ -36,5 +36,5 @@ class SolarAPI:
                 for k, v in connection.items():
                     if v.lower() == 'grid':
                         is_export = k.lower() == 'to'
-            logger.debug('%s %dW', 'Exporting' if is_export else 'Importing', grid_import)
+            LOGGER.debug('%s %dW', 'Exporting' if is_export else 'Importing', grid_import)
             return -grid_import if is_export else grid_import, pv

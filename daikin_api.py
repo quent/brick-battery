@@ -1,10 +1,25 @@
-import logging
-import requests
-import urllib.parse
+"""
+Module for the Daikin BRP072A42 WiFi Control unit API
+"""
 
-logger = logging.getLogger(__name__)
+import logging
+import urllib.parse
+import requests
+
+LOGGER = logging.getLogger(__name__)
 
 class Aircon:
+    """
+    An Aircon class interacts with one physical instance of a Daikin wifi unit.
+    It implements some functionalities specific to the Ururu Sarara (FTXZN) unit
+    like humidification settings.
+    Unfortunately, this Ururu unit does not implement the fan settings part of the
+    API, which means we have no control to increase heating output if the IR remote
+    last set it to low airflow.
+    The sensor parameter cmpfreq gives us the frequency of the outside compressor
+    which drives most of the whole aircon consumption and lets us estimate roughly
+    its actual electrical load in watts.
+    """
 
     mode = {'' : 'HUMIDIFY',
             '0': '',
@@ -22,36 +37,49 @@ class Aircon:
     MAX_AC_CONSUMPTION = 1400
 
     def __init__(self, num, host):
-        self.num = num;
-        self.name = 'aircon' + str(num);
-        self.host = host;
-        self.sensors = {};
-        self.info = {};
-        self.controls = {};
-        self.command_to_send = False;
+        self.num = num
+        self.name = 'aircon' + str(num)
+        self.host = host
+        self.sensors = {}
+        self.info = {}
+        self.controls = {}
+        self.command_to_send = False
 
     def api_get(self, path):
-        logger.debug(self.host + path)
+        """
+        Send a get command at the specified path to the aircon controller
+        and return the values as a dictionary if ok or an empty dictionary if
+        any error occurred.
+        """
+        LOGGER.debug(self.host + path)
         try:
             response = requests.get(self.host + path, timeout=4)
             response.raise_for_status()
-        except Exception as e:
-            logger.error('aircon api get request error: %s', e)
+        except Exception as ex:
+            LOGGER.error('aircon api get request error: %s', ex)
             return {}
         return dict(x.split('=') for x in response.text.split(','))
 
     def api_set(self, path, dic):
-        logger.debug(self.host + path)
+        """
+        Send a set command: an HTTP GET but with request parameters to set controls
+        at the specified path to the aircon controller using the parameter in dic
+        and return the values as a dictionary if ok or an empty dictionary if
+        any transport error occurred, it will return the actual response if
+        the protocol command was invalid (check the value of 'ret').
+        """
+        LOGGER.debug(self.host + path)
+        LOGGER.debug(self.host + path)
         try:
             response = requests.get(self.host + path, dic, timeout=4)
             response.raise_for_status()
-        except Exception as e:
-            logger.error('aircon api set request error: %s', e)
+        except Exception as ex:
+            LOGGER.error('aircon api set request error: %s', ex)
             return {}
         ret_dic = dict(x.split('=') for x in response.text.split(','))
-        if not 'ret' in ret_dic or ret_dic['ret'].upper() != 'OK':
-            logger.error('aircon api set request returned with %s, request was %s',
-                         response.text, r.request.path_url)
+        if 'ret' not in ret_dic or ret_dic['ret'].upper() != 'OK':
+            LOGGER.error('aircon api set request returned with %s, request was %s',
+                         response.text, response.request.path_url)
         return ret_dic
 
     def get_sensor_info(self):
@@ -64,13 +92,17 @@ class Aircon:
         self.controls = controls
 
     def set_control_info(self):
-        c = self.controls;
-        settings = {'pow': c['pow'], 'mode': c['mode'], 'stemp': c['stemp'], 'shum': c['shum']};
-        logger.info('Setting ' + self.name + ' ' +
-                    Aircon.power[c['pow']] + ' ' +
-                    Aircon.mode[c['mode']] + ' ' +
-                    c['stemp'] + 'ºC, ' +
-                    c['shum'] + '% RH')
+        controls = self.controls
+        settings = {'pow': controls['pow'],
+                    'mode': controls['mode'],
+                    'stemp': controls['stemp'],
+                    'shum': controls['shum']}
+        LOGGER.info('Setting %s %s %s %sºC, %s%% RH',
+                    self.name,
+                    Aircon.power[controls['pow']],
+                    Aircon.mode[controls['mode']],
+                    controls['stemp'],
+                    controls['shum'])
         return self.api_set('/aircon/set_control_info', settings)
 
     def get_basic_info(self):
