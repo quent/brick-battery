@@ -1,13 +1,25 @@
 #!/usr/bin/env python3
+"""
+The brick-battery module is the entry point to start
+the BrickBatteryCharger with Aircon and SolarAPI instances.
+
+It runs a main loop to poll solar generation, energy consumption
+and air conditioners settings and sensors.
+Air con settings are adjusted to make the household consumption
+fit within a pre-set import range.
+"""
+
 from datetime import datetime
 import logging
 import math
 import os
 import sys
 import time
+import traceback
 
 from daikin_api import Aircon
 from solar_api import SolarAPI
+from csv_logger import CSVLogger
 
 LOGGER = logging.getLogger('brick_battery')
 
@@ -31,9 +43,25 @@ def main():
         'shum': '0'
     }
 
+    data_to_save = ['datetime',
+                    'PV generation in W',
+                    'Grid import in W',
+                    'Estimated A/C consumption in W',
+                    'Living Room compressor frequency in Hz',
+                    'Bedrooms compressor frequency in Hz',
+                    'Outdoor temperature in ºC',
+                    'Living Room temperature in ºC',
+                    'Bedrooms temperature in ºC',
+                    'Target Living Room temperature in ºC',
+                    'Target Bedrooms temperature in ºC',
+                    'Target Living Room humidity in %RH',
+                    'Target Bedrooms humidity in %RH',
+                    ]
+    csv = CSVLogger('energy_data.csv', data_to_save)
     # don't read less often than 3s otherwise SolarEdge drops connection
     bbc = BrickBatteryCharger(ac,
                               solar,
+                              csv,
                               read_interval=3,
                               set_interval=60,
                               min_load=200,
@@ -43,15 +71,55 @@ def main():
     bbc.charge()
 
 class BrickBatteryCharger:
+    """
+    The BrickBatteryCharger holds the logic to adjust the aircons
+    settings. The current implementation uses 2 aircon instances
+    but could be made more generic to run any number of them.
+    It changes settings only every `set_interval` (~1min) while
+    it reads data every `read_interval` (~3sec) because it can take
+    some time for aircon units to adapt their power regime to the
+    new settings.
 
-    def __init__(self, ac, solar, set_interval, read_interval,
+    Because the Ururu Sarara aircon fan settings cannot be accessed by
+    the wifi module (thanks Daikin), this implementation requires that
+    the aircons are set to max fan speed using the infrared remote so that
+    they can provide their max capacity when PV is producing a lot, fan speed
+    to Auto does not achieve the same output. If you're using this code
+    with aircons that allow fan speed through the wifi API, the controlling
+    logic could be greatly enhanced to adjust power output by using fan speed
+    more than than temperature settings.
+    """
+    def __init__(self, ac, solar, csv, set_interval, read_interval,
                  min_load, max_load, sleep_mode_settings={},
                  dryrun_mode=False):
+        """
+        Args:
+            ac a list of Aircon instances
+            solar a SolarAPI instance
+            csv a CSVLogger instance
+            set_interval the time in seconds between sending
+                         new commands to the aircons
+            read_interval the (minimum) time in seconds between aircon
+                          and solar sensors polls
+            min_load target minimum load in watts
+            max_load target maximum load in watts. For example we want
+                     the household to always import from the grid a value
+                     within [0, 300] watts. A larger range gives more
+                     tolerance and avoid changing settings continuously if
+                     household comsumption or PV generation fluctuate often.
+            sleep_mode_settings a set of Aircon settings to send to the aircon
+                                units when PV generation is stopped in the evening.
+            dry_run set to true to test your system after changes without
+                    interfering with the household operation.
+        """
         self.ac = ac
         self.solar = solar
+        self.csv = csv
         self.set_interval = set_interval
         self.read_interval = read_interval
         self.next_set = 10
+        self.csv_save_interval = 120
+        self.csv_next_save = self.csv_save_interval
         self.dryrun = dryrun_mode
         self.min_load = min_load
         self.max_load = max_load
@@ -71,6 +139,7 @@ class BrickBatteryCharger:
                 time.sleep(self.read_interval)
             except Exception as e:
                 LOGGER.error('Something went wrong, skip this run loop call, cause: %s', e)
+                LOGGER.error(traceback.format_exc())
 
     def load_ac_status(self):
         for unit in self.ac:
@@ -86,9 +155,10 @@ class BrickBatteryCharger:
         return total
 
     def set_ac_controls(self, target):
-        '''The interesting part: adaptative controller to play
+        """The interesting part: adaptative controller to play
         with the aircon buttons and hope that we land as close
-        as possible within the threshold by the next set iteration
+        as possible within the target consumption range by the
+        next set iteration.
         Input parameters are:
         - set_interval duration between each AC set operation,
           for how reactive we want to be, but the aircons can
@@ -97,7 +167,7 @@ class BrickBatteryCharger:
           based on how far we are from the target
         - humidifier_consumption used to estimate its impact to
           get closer to the target
-        '''
+        """
         # Watts per temperature +/- button press
         step_size = 200
         # Watts when humidifier is turned on
@@ -201,11 +271,12 @@ class BrickBatteryCharger:
             unit.set_control_info()
 
     def calculate_target(self, load, consumption):
-        '''Target here is difference consumption wanted from AC
-           Negative target to decrease consumption, positive to increase it
-        '''
+        """
+        Target here is difference consumption wanted from AC
+        Negative target to decrease consumption, positive to increase it
+        """
         avg_load_target = (self.max_load + self.min_load) / 2
-        if self.min_load < load and load < self.max_load:
+        if self.min_load < load < self.max_load:
             # Don't bother touching a thing if importing and
             # less than 200W
             return 0
@@ -220,12 +291,14 @@ class BrickBatteryCharger:
         return 0
 
     def read_set_loop(self):
-        LOGGER.info(datetime.now().strftime("%d/%m/%Y %H:%M:%S"))
+        now = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
+        LOGGER.info(now)
         grid_import, pv_generation = self.solar.check_se_load()
         if grid_import < 0:
             LOGGER.info('PV generating %dW Exporting %dW', pv_generation, -grid_import)
         else:
             LOGGER.info('PV generating %dW Importing %dW', pv_generation, grid_import)
+
         if pv_generation == 0 and not self.is_sleep_mode:
             LOGGER.info('PV generation just stopped, entering sleep mode')
             self.is_sleep_mode = True
@@ -233,14 +306,34 @@ class BrickBatteryCharger:
             for unit in self.ac:
                 unit.controls = self.sleep_mode_settings
                 unit.set_control_info()
-        elif pv_generation > 0 and self.is_sleep_mode:
+        elif pv_generation >= 50 and self.is_sleep_mode:
             LOGGER.info('PV generation just starting, leaving sleep mode')
             self.is_sleep_mode = False
             self.read_interval = self.read_interval / 10
-        elif pv_generation > 0:
-            self.load_ac_status()
-            ac_consumption = self.get_ac_consumption()
-            LOGGER.info('Estimated combined A/C consumption %dW', ac_consumption)
+
+        self.load_ac_status()
+        ac_consumption = self.get_ac_consumption()
+        LOGGER.info('Estimated combined A/C consumption %dW', ac_consumption)
+        # Make sure values match the order of data_to_save
+        self.csv.write([now,
+                        pv_generation,
+                        grid_import,
+                        ac_consumption,
+                        self.ac[0].sensors.get('cmpfreq', ''),
+                        self.ac[1].sensors.get('cmpfreq', ''),
+                        self.ac[0].sensors.get('otemp', ''),
+                        self.ac[0].sensors.get('htemp', ''),
+                        self.ac[1].sensors.get('htemp', ''),
+                        self.ac[0].controls.get('stemp', ''),
+                        self.ac[1].controls.get('stemp', ''),
+                        self.ac[0].controls.get('shum', ''),
+                        self.ac[1].controls.get('shum', ''),
+                        ])
+        self.csv_next_save -= self.read_interval
+        if self.csv_next_save <= 0:
+            self.csv_next_save = self.csv_save_interval
+            self.csv.save()
+        if not self.is_sleep_mode:
             target = self.calculate_target(grid_import, ac_consumption)
             self.next_set -= self.read_interval
             LOGGER.info('Target is %d (import in [%d, %d]) ' +
