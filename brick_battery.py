@@ -61,12 +61,13 @@ def main():
     # don't read less often than 3s otherwise SolarEdge drops connection
     bbc = BrickBatteryCharger(ac,
                               solar,
-                              csv,
                               read_interval=3,
                               set_interval=60,
                               min_load=200,
                               max_load=700,
+                              csv=csv,
                               sleep_mode_settings=sleep_mode_settings,
+                              wakeup_threshold=200,
                               dryrun_mode=False)
     bbc.charge()
 
@@ -89,14 +90,15 @@ class BrickBatteryCharger:
     logic could be greatly enhanced to adjust power output by using fan speed
     more than than temperature settings.
     """
-    def __init__(self, ac, solar, csv, set_interval, read_interval,
-                 min_load, max_load, sleep_mode_settings={},
-                 dryrun_mode=False):
+    def __init__(self, ac, solar, set_interval, read_interval,
+                 min_load, max_load, csv=None, sleep_mode_settings={},
+                 wakeup_threshold=200, dryrun_mode=False):
         """
         Args:
             ac a list of Aircon instances
             solar a SolarAPI instance
-            csv a CSVLogger instance
+            csv a CSVLogger instance to write analytics information to, defaults to
+                None if no logging is required
             set_interval the time in seconds between sending
                          new commands to the aircons
             read_interval the (minimum) time in seconds between aircon
@@ -109,6 +111,9 @@ class BrickBatteryCharger:
                      household comsumption or PV generation fluctuate often.
             sleep_mode_settings a set of Aircon settings to send to the aircon
                                 units when PV generation is stopped in the evening.
+            wakeup_threshold the minimum PV generation in watts from the inverter
+                             before sleep_mode_settings are ignored and the brick
+                             loader starts controlling the aircons
             dry_run set to true to test your system after changes without
                     interfering with the household operation.
         """
@@ -125,11 +130,18 @@ class BrickBatteryCharger:
         self.max_load = max_load
         self.is_sleep_mode = False
         self.sleep_mode_settings = sleep_mode_settings
+        self.wakeup_threshold = wakeup_threshold
 
     def charge(self):
         if self.dryrun:
             LOGGER.warning('Running dry-run mode: not sending any commands to aircons')
+        if self.csv:
+            LOGGER.info('Logging runtime analytics to %s', self.csv.file.name)
         self.load_ac_status()
+        grid_import, pv_generation = self.solar.check_se_load()
+        if pv_generation == 0:
+            LOGGER.info('Inverter off, started in sleep mode')
+            self.set_sleep_mode()
         for unit in self.ac:
             unit.get_basic_info()
             LOGGER.info(unit)
@@ -290,6 +302,18 @@ class BrickBatteryCharger:
         # or we're exporting but we've already turned the AC to max capacity
         return 0
 
+    def set_sleep_mode(self):
+        if self.is_sleep_mode:
+            return
+        self.is_sleep_mode = True
+        self.read_interval *= 10
+
+    def unset_sleep_mode(self):
+        if not self.is_sleep_mode:
+            return
+        self.is_sleep_mode = False
+        self.read_interval /= 10
+
     def read_set_loop(self):
         now = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
         LOGGER.info(now)
@@ -301,38 +325,37 @@ class BrickBatteryCharger:
 
         if pv_generation == 0 and not self.is_sleep_mode:
             LOGGER.info('PV generation just stopped, entering sleep mode')
-            self.is_sleep_mode = True
-            self.read_interval = self.read_interval * 10
+            self.set_sleep_mode()
             for unit in self.ac:
                 unit.controls = self.sleep_mode_settings
                 unit.set_control_info()
-        elif pv_generation >= 50 and self.is_sleep_mode:
+        elif pv_generation >= self.wakeup_threshold and self.is_sleep_mode:
             LOGGER.info('PV generation just starting, leaving sleep mode')
-            self.is_sleep_mode = False
-            self.read_interval = self.read_interval / 10
+            self.unset_sleep_mode()
 
         self.load_ac_status()
         ac_consumption = self.get_ac_consumption()
         LOGGER.info('Estimated combined A/C consumption %dW', ac_consumption)
-        # Make sure values match the order of data_to_save
-        self.csv.write([now,
-                        pv_generation,
-                        grid_import,
-                        ac_consumption,
-                        self.ac[0].sensors.get('cmpfreq', ''),
-                        self.ac[1].sensors.get('cmpfreq', ''),
-                        self.ac[0].sensors.get('otemp', ''),
-                        self.ac[0].sensors.get('htemp', ''),
-                        self.ac[1].sensors.get('htemp', ''),
-                        self.ac[0].controls.get('stemp', ''),
-                        self.ac[1].controls.get('stemp', ''),
-                        self.ac[0].controls.get('shum', ''),
-                        self.ac[1].controls.get('shum', ''),
-                        ])
-        self.csv_next_save -= self.read_interval
-        if self.csv_next_save <= 0:
-            self.csv_next_save = self.csv_save_interval
-            self.csv.save()
+        # Make sure values match the order of CSVLogger.data_to_save
+        if self.csv:
+            self.csv.write([now,
+                            pv_generation,
+                            grid_import,
+                            ac_consumption,
+                            self.ac[0].sensors.get('cmpfreq', ''),
+                            self.ac[1].sensors.get('cmpfreq', ''),
+                            self.ac[0].sensors.get('otemp', ''),
+                            self.ac[0].sensors.get('htemp', ''),
+                            self.ac[1].sensors.get('htemp', ''),
+                            self.ac[0].controls.get('stemp', ''),
+                            self.ac[1].controls.get('stemp', ''),
+                            self.ac[0].controls.get('shum', ''),
+                            self.ac[1].controls.get('shum', ''),
+                            ])
+            self.csv_next_save -= self.read_interval
+            if self.csv_next_save <= 0:
+                self.csv_next_save = self.csv_save_interval
+                self.csv.save()
         if not self.is_sleep_mode:
             target = self.calculate_target(grid_import, ac_consumption)
             self.next_set -= self.read_interval
