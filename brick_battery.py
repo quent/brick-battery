@@ -1,13 +1,15 @@
 #!/usr/bin/env python3
 """
 The brick-battery module is the entry point to start
-the BrickBatteryCharger with Aircon and SolarAPI instances.
+the BrickBatteryCharger with Aircon and SolarInfo instances.
 
 It runs a main loop to poll solar generation, energy consumption
 and air conditioners settings and sensors.
 Air con settings are adjusted to make the household consumption
 fit within a pre-set import range.
 """
+
+import asyncio
 
 from datetime import datetime
 import logging
@@ -18,7 +20,7 @@ import time
 import traceback
 
 from daikin_api import Aircon
-from solar_api import SolarAPI
+from solaredge_api import SolarInfo
 from csv_logger import CSVLogger
 
 LOGGER = logging.getLogger('brick_battery')
@@ -26,7 +28,8 @@ LOGGER = logging.getLogger('brick_battery')
 def main():
     logging.basicConfig(level=logging.INFO)
     logging.getLogger("urllib3").setLevel(logging.INFO)
-    logging.getLogger("requests").setLevel(logging.INFO)
+    logging.getLogger("aiohttp").setLevel(logging.INFO)
+
 
     ac = [Aircon(0, 'http://192.168.1.101'),
           Aircon(1, 'http://192.168.1.102')]
@@ -34,7 +37,7 @@ def main():
     current_power_flow_file = os.path.join(
         os.path.dirname(os.path.realpath(sys.argv[0])),
         'currentPowerFlow.curl')
-    solar = SolarAPI(current_power_flow_file)
+    solar = SolarInfo(current_power_flow_file)
 
     sleep_mode_settings = {
         'pow': '1',
@@ -68,7 +71,7 @@ def main():
                               csv=csv,
                               sleep_mode_settings=sleep_mode_settings,
                               wakeup_threshold=200,
-                              dryrun_mode=False)
+                              dryrun_mode=True)
     bbc.charge()
 
 class BrickBatteryCharger:
@@ -96,7 +99,7 @@ class BrickBatteryCharger:
         """
         Args:
             ac a list of Aircon instances
-            solar a SolarAPI instance
+            solar a SolarInfo instance
             csv a CSVLogger instance to write analytics information to, defaults to
                 None if no logging is required
             set_interval the time in seconds between sending
@@ -133,30 +136,36 @@ class BrickBatteryCharger:
         self.wakeup_threshold = wakeup_threshold
 
     def charge(self):
+        loop = asyncio.get_event_loop()
         if self.dryrun:
             LOGGER.warning('Running dry-run mode: not sending any commands to aircons')
         if self.csv:
             LOGGER.info('Logging runtime analytics to %s', self.csv.file.name)
-        self.load_ac_status()
-        grid_import, pv_generation = self.solar.check_se_load()
+        [(grid_import, pv_generation), *_] = loop.run_until_complete(asyncio.gather(
+            self.solar.check_se_load(),
+            *[unit.get_basic_info() for unit in self.ac],
+            *self.get_load_ac_status_requests()))
         if pv_generation == 0:
             LOGGER.info('Inverter off, started in sleep mode')
             self.set_sleep_mode()
         for unit in self.ac:
-            unit.get_basic_info()
             LOGGER.info(unit)
+        loop.run_until_complete(self.main_loop())
+
+    async def main_loop(self):
         while True:
             try:
-                self.read_set_loop()
-                time.sleep(self.read_interval)
+                await asyncio.gather(self.read_set_step(), asyncio.sleep(self.read_interval))
             except Exception as e:
                 LOGGER.error('Something went wrong, skip this run loop call, cause: %s', e)
                 LOGGER.error(traceback.format_exc())
 
-    def load_ac_status(self):
+    def get_load_ac_status_requests(self):
+        requests = []
         for unit in self.ac:
-            unit.get_sensor_info()
-            unit.get_control_info()
+            requests.append(unit.get_sensor_info())
+            requests.append(unit.get_control_info())
+        return requests
 
     def get_ac_consumption(self):
         total = 0
@@ -289,8 +298,8 @@ class BrickBatteryCharger:
         """
         avg_load_target = (self.max_load + self.min_load) / 2
         if self.min_load < load < self.max_load:
-            # Don't bother touching a thing if importing and
-            # less than 200W
+            # Don't bother touching a thing if importing within
+            # acceptable load range
             return 0
         if load > self.max_load and consumption > 0:
             # We need to reduce AC consumption
@@ -314,10 +323,12 @@ class BrickBatteryCharger:
         self.is_sleep_mode = False
         self.read_interval /= 10
 
-    def read_set_loop(self):
+    async def read_set_step(self):
         now = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
         LOGGER.info(now)
-        grid_import, pv_generation = self.solar.check_se_load()
+        [(grid_import, pv_generation), *_] = await asyncio.gather(
+            self.solar.check_se_load(),
+            *self.get_load_ac_status_requests())
         if grid_import < 0:
             LOGGER.info('PV generating %dW Exporting %dW', pv_generation, -grid_import)
         else:
@@ -333,7 +344,6 @@ class BrickBatteryCharger:
             LOGGER.info('PV generation just starting, leaving sleep mode')
             self.unset_sleep_mode()
 
-        self.load_ac_status()
         ac_consumption = self.get_ac_consumption()
         LOGGER.info('Estimated combined A/C consumption %dW', ac_consumption)
         # Make sure values match the order of CSVLogger.data_to_save

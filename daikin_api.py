@@ -4,7 +4,7 @@ Module for the Daikin BRP072A42 WiFi Control unit API
 
 import logging
 import urllib.parse
-import requests
+import aiohttp
 
 LOGGER = logging.getLogger(__name__)
 
@@ -44,8 +44,11 @@ class Aircon:
         self.info = {}
         self.controls = {}
         self.command_to_send = False
+        self.client_session = aiohttp.ClientSession(
+            raise_for_status=True,
+            conn_timeout=4)
 
-    def api_get(self, path):
+    async def api_get(self, path):
         """
         Send a get command at the specified path to the aircon controller
         and return the values as a dictionary if ok or an empty dictionary if
@@ -53,14 +56,14 @@ class Aircon:
         """
         LOGGER.debug(self.host + path)
         try:
-            response = requests.get(self.host + path, timeout=4)
-            response.raise_for_status()
+            response = await self.client_session.get(self.host + path)
         except Exception as ex:
             LOGGER.error('aircon api get request error: %s', ex)
             return {}
-        return dict(x.split('=') for x in response.text.split(','))
+        text = await response.text()
+        return dict(x.split('=') for x in text.split(','))
 
-    def api_set(self, path, dic):
+    async def api_set(self, path, dic):
         """
         Send a set command: an HTTP GET but with request parameters to set controls
         at the specified path to the aircon controller using the parameter in dic
@@ -69,29 +72,28 @@ class Aircon:
         the protocol command was invalid (check the value of 'ret').
         """
         LOGGER.debug(self.host + path)
-        LOGGER.debug(self.host + path)
         try:
-            response = requests.get(self.host + path, dic, timeout=4)
-            response.raise_for_status()
+            response = await self.client_session.get(self.host + path, dic)
         except Exception as ex:
             LOGGER.error('aircon api set request error: %s', ex)
             return {}
-        ret_dic = dict(x.split('=') for x in response.text.split(','))
+        text = await response.text()
+        ret_dic = dict(x.split('=') for x in text.split(','))
         if 'ret' not in ret_dic or ret_dic['ret'].upper() != 'OK':
             LOGGER.error('aircon api set request returned with %s, request was %s',
                          response.text, response.request.path_url)
         return ret_dic
 
-    def get_sensor_info(self):
-        self.sensors = self.api_get('/aircon/get_sensor_info')
+    async def get_sensor_info(self):
+        self.sensors = await self.api_get('/aircon/get_sensor_info')
 
-    def get_control_info(self):
-        controls = self.api_get('/aircon/get_control_info')
+    async def get_control_info(self):
+        controls = await self.api_get('/aircon/get_control_info')
         if 'shum' in controls and controls['shum'].upper() == 'CONTINUE':
             controls['shum'] = '100'
         self.controls = controls
 
-    def set_control_info(self):
+    async def set_control_info(self):
         controls = self.controls
         settings = {'pow': controls['pow'],
                     'mode': controls['mode'],
@@ -103,10 +105,10 @@ class Aircon:
                     Aircon.mode[controls['mode']],
                     controls['stemp'],
                     controls['shum'])
-        return self.api_set('/aircon/set_control_info', settings)
+        return await self.api_set('/aircon/set_control_info', settings)
 
-    def get_basic_info(self):
-        self.info = self.api_get('/common/basic_info')
+    async def get_basic_info(self):
+        self.info = await self.api_get('/common/basic_info')
         if 'name' in self.info:
             self.name = urllib.parse.unquote(self.info['name'])
 
