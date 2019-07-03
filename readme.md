@@ -39,7 +39,7 @@ designing the system).
 
 ## Some software specs
 
-- Coded in Python3
+- Coded in Python3.5
 - Implements a client for the SolarEdge API (to get power of inverter and grid
 net meter)
 - Implements a client for the Daikin API
@@ -52,6 +52,7 @@ to adjust their running regime.
 - Logs sensors and controls to know what is going on during the system operation
 - Has a sleep mode setting for the aircons to operate in when PV generation has
 stopped for the day
+- Polls APIs asynchronously (concurrently)
 
 ## The physical setup:
 - Canberra climate: cold winters but sunny and relatively warm days with cool
