@@ -1,4 +1,7 @@
-import datetime
+"""
+Module for the SolarEdge Web API to get realtime PV generation, load and grid import
+pushed by the inverter and energy monitor.
+"""
 import logging
 import uncurl
 
@@ -7,80 +10,95 @@ import aiohttp
 LOGGER = logging.getLogger(__name__)
 
 class SolarInfo:
+    """
+    The SolarInfo class manages a persistent secure HTTP connection to the 
+    Solaredge API and allows to retrieve data asynchronously.
 
-    def __init__(self, cpf_curl_filename, site_curl_filename=None):
+    Just store the curl command with parameters used to get the current power flow
+    from your site in a text file and pass the filename to the constructor.
+
+    To ensure the connection does not get closed, it is recommended to poll
+    about every 3 seconds.
+    """
+
+    def __init__(self, curl_filename):
         """
-        cpf_curl_filename text file containing the curl command used to retrieve
+        curl_filename text file containing the curl command used to retrieve
                           currentPowerFlow data
-        site_curl_filename optional text file containing the curl command used
-                           to retrieve the last updated information (optional,
-                           only used to verify when data was last updated if the
-                           SolarEdge backend or inverter is not processing and
-                           dispatching real-time data). currentPowerFlow
-                           does not contain any timestamp :((((
         """
-        self.session = aiohttp.ClientSession(raise_for_status=True)
-        cpf_curl_file = open(cpf_curl_filename)
-        cpf_curl_command = cpf_curl_file.read()
-        cpf_curl_file.close()
-        self.cpf_context = uncurl.parse_context(cpf_curl_command)
+        self._session = None
+        with open(curl_filename) as curl_file:
+            curl_command = curl_file.read()
+            self.cpf_context = uncurl.parse_context(curl_command)
 
-        if not site_curl_filename:
-            self.site_context = None
-        else:
-            site_curl_file = open(site_curl_filename)
-            site_curl_command = site_curl_file.read()
-            site_curl_file.close()
-            self.site_context = uncurl.parse_context(site_curl_command)
+    def _get_session(self):
+        """
+        Lazy ClientSession initialisation to ensure its life-cycle remains
+        within the one of the event loop
+        """
+        if self._session is None:
+            self._session = aiohttp.ClientSession(raise_for_status=True)
+        return self._session
 
     async def check_se_load(self):
         """
         Send the current power flow prepared request to the Solar API and
         return a 2-uple with flow to grid and PV generation, both in watts.
-        Returns NaN, NaN is the request failed.
+        Return NaN, NaN if the request failed or the JSON could not be parsed.
+
+        Examples of JSON responses (note the capitalisation of names
+        in connections depends on whether it is in from or to, yey!):
+
+        * Import with generation:
+        {"siteCurrentPowerFlow": {
+            "updateRefreshRate": 3,
+            "unit": "kW",
+            "connections":
+                [{"from": "GRID", "to": "Load"},
+                 {"from": "PV",   "to": "Load"}],
+            "GRID": {"status": "Active", "currentPower": 0.13},
+            "LOAD": {"status": "Active", "currentPower": 3.15},
+            "PV":   {"status": "Active", "currentPower": 3.02}}}
+
+        * Balanced load and generation:
+        {"siteCurrentPowerFlow":{
+            "updateRefreshRate":3,
+            "unit":"kW",
+            "connections":
+                [{"from":"PV","to":"Load"}],
+            "GRID":{"status":"Active","currentPower":0.0},
+            "LOAD":{"status":"Active","currentPower":2.98},
+            "PV":{"status":"Active","currentPower":2.98}}}
+
+        * Export:
+        {"siteCurrentPowerFlow":{
+            "updateRefreshRate":3,
+            "unit":"kW",
+            "connections":
+                [{"from":"LOAD","to":"Grid"},
+                 {"from":"PV","to":"Load"}],
+            "GRID":{"status":"Active","currentPower":0.19},
+            "LOAD":{"status":"Active","currentPower":2.2},
+            "PV":{"status":"Active","currentPower":2.39}}}
         """
         try:
-            response = await self.session.request(method=self.cpf_context.method,
-                url=self.cpf_context.url,
-                headers=self.cpf_context.headers,
-                cookies=self.cpf_context.cookies)
-        except Exception as e:
-            LOGGER.error('Call to SolarEdge API for current power flow failed: %s', e)
-            return float('NaN'), float('NaN')
-        if response.status == 200:
-            json = await response.json()
-            grid_import = int(json['siteCurrentPowerFlow']['GRID']['currentPower'] * 1000)
-            pv = int(json['siteCurrentPowerFlow']['PV']['currentPower'] * 1000)
-            is_export = False
-            for connection in json['siteCurrentPowerFlow']['connections']:
-                for k, v in connection.items():
-                    if v.lower() == 'grid':
-                        is_export = k.lower() == 'to'
-            LOGGER.debug('%s %dW', 'Exporting' if is_export else 'Importing', grid_import)
-            return -grid_import if is_export else grid_import, pv
-        else:
-            return float('NaN'), float('NaN')
+            async with await self._get_session().request(
+                    method=self.cpf_context.method,
+                    url=self.cpf_context.url,
+                    headers=self.cpf_context.headers,
+                    cookies=self.cpf_context.cookies) as response:
 
-    async def check_last_updated(self):
-        try:
-            response = await self.session.request(
-                method=self.site_context.method,
-                url=self.site_context.url,
-                headers=self.site_context.headers,
-                cookies=self.site_context.cookies)
-        except Exception as e:
-            LOGGER.error('Call to SolarEdge API for site info failed: %s', e)
-            return None
-        if response.status == 200:
-            json = await response.json()
-            last_updated_string = json['fieldOverview']['fieldOverview']['lastUpdateTime']
-            LOGGER.debug('last updated string %s\n', last_updated_string)
-            try:
-                last_updated_datetime = datetime.datetime.strptime(last_updated_string[:19], '%Y-%m-%d %H:%M:%S')
-            except ValueError as ve:
-                LOGGER.warning('SolarEdge API for site returned a date that could not be parsed: %s, error: %s', lastUpdated, ve)
-                return None
-            LOGGER.debug('SolarEdge data last updated on %s', last_updated_datetime)
-            return last_updated_datetime
-        else:
-            return None
+                json = await response.json()
+                grid_import = int(json['siteCurrentPowerFlow']['GRID']['currentPower'] * 1000)
+                pv_generation = int(json['siteCurrentPowerFlow']['PV']['currentPower'] * 1000)
+                is_export = False
+                for connection in json['siteCurrentPowerFlow']['connections']:
+                    for key, value in connection.items():
+                        if key == 'to' and value.lower() == 'grid':
+                            is_export = True
+                            break
+                LOGGER.debug('%s %dW', 'Exporting' if is_export else 'Importing', grid_import)
+                return (-grid_import if is_export else grid_import), pv_generation
+        except Exception as ex:
+            LOGGER.error('Call to SolarEdge API for current power flow failed: %s', ex)
+            return float('NaN'), float('NaN')

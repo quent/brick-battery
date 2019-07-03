@@ -10,13 +10,11 @@ fit within a pre-set import range.
 """
 
 import asyncio
-
 from datetime import datetime
 import logging
 import math
 import os
 import sys
-import time
 import traceback
 
 from daikin_api import Aircon
@@ -26,13 +24,20 @@ from csv_logger import CSVLogger
 LOGGER = logging.getLogger('brick_battery')
 
 def main():
+    """
+    Initialise SolarInfo, Aircon and CSVLogger instances with all settings for
+    target grid import (or export) range, read frequency, aircon set frequency,
+    parameters logged to CSV, sleep mode settings and thresholds.
+    Eventually, all this should be read a config file and even be settable via a
+    web API.
+    """
     logging.basicConfig(level=logging.INFO)
     logging.getLogger("urllib3").setLevel(logging.INFO)
     logging.getLogger("aiohttp").setLevel(logging.INFO)
 
 
-    ac = [Aircon(0, 'http://192.168.1.101'),
-          Aircon(1, 'http://192.168.1.102')]
+    aircons = [Aircon(0, 'http://192.168.1.101'),
+               Aircon(1, 'http://192.168.1.102')]
 
     current_power_flow_file = os.path.join(
         os.path.dirname(os.path.realpath(sys.argv[0])),
@@ -62,7 +67,7 @@ def main():
                     ]
     csv = CSVLogger('energy_data.csv', data_to_save)
     # don't read less often than 3s otherwise SolarEdge drops connection
-    bbc = BrickBatteryCharger(ac,
+    bbc = BrickBatteryCharger(aircons,
                               solar,
                               read_interval=3,
                               set_interval=60,
@@ -91,14 +96,14 @@ class BrickBatteryCharger:
     to Auto does not achieve the same output. If you're using this code
     with aircons that allow fan speed through the wifi API, the controlling
     logic could be greatly enhanced to adjust power output by using fan speed
-    more than than temperature settings.
+    more than the temperature setting itself.
     """
-    def __init__(self, ac, solar, set_interval, read_interval,
+    def __init__(self, aircons, solar, set_interval, read_interval,
                  min_load, max_load, csv=None, sleep_mode_settings={},
                  wakeup_threshold=200, dryrun_mode=False):
         """
         Args:
-            ac a list of Aircon instances
+            aircons a list of Aircon instances
             solar a SolarInfo instance
             csv a CSVLogger instance to write analytics information to, defaults to
                 None if no logging is required
@@ -110,7 +115,7 @@ class BrickBatteryCharger:
             max_load target maximum load in watts. For example we want
                      the household to always import from the grid a value
                      within [0, 300] watts. A larger range gives more
-                     tolerance and avoid changing settings continuously if
+                     tolerance and avoids changing settings continuously if
                      household comsumption or PV generation fluctuate often.
             sleep_mode_settings a set of Aircon settings to send to the aircon
                                 units when PV generation is stopped in the evening.
@@ -120,7 +125,7 @@ class BrickBatteryCharger:
             dry_run set to true to test your system after changes without
                     interfering with the household operation.
         """
-        self.ac = ac
+        self.ac = aircons
         self.solar = solar
         self.csv = csv
         self.set_interval = set_interval
@@ -136,12 +141,16 @@ class BrickBatteryCharger:
         self.wakeup_threshold = wakeup_threshold
 
     def charge(self):
+        """
+        Set up the event loop for the async API polls, do a first poll,
+        then run the main loop (using the event loop...)
+        """
         loop = asyncio.get_event_loop()
         if self.dryrun:
             LOGGER.warning('Running dry-run mode: not sending any commands to aircons')
         if self.csv:
             LOGGER.info('Logging runtime analytics to %s', self.csv.file.name)
-        [(grid_import, pv_generation), *_] = loop.run_until_complete(asyncio.gather(
+        [(_, pv_generation), *_] = loop.run_until_complete(asyncio.gather(
             self.solar.check_se_load(),
             *[unit.get_basic_info() for unit in self.ac],
             *self.get_load_ac_status_requests()))
@@ -153,14 +162,24 @@ class BrickBatteryCharger:
         loop.run_until_complete(self.main_loop())
 
     async def main_loop(self):
+        """
+        Run forever the poll SolarInfo and Aircon to see what need to be done.
+        The wait is done in parallel so that if the read (and possibly set step)
+        took 2 seconds and we want to run every 3 seconds, the wait will only block
+        for another extra second.
+        """
         while True:
             try:
                 await asyncio.gather(self.read_set_step(), asyncio.sleep(self.read_interval))
-            except Exception as e:
-                LOGGER.error('Something went wrong, skip this run loop call, cause: %s', e)
+            except Exception as ex:
+                LOGGER.error('Something went wrong, skip this run loop call, cause: %s', ex)
                 LOGGER.error(traceback.format_exc())
 
     def get_load_ac_status_requests(self):
+        """
+        Just return a list of futures to poll each aircon info and be later
+        awaited
+        """
         requests = []
         for unit in self.ac:
             requests.append(unit.get_sensor_info())
@@ -168,6 +187,10 @@ class BrickBatteryCharger:
         return requests
 
     def get_ac_consumption(self):
+        """
+        Calculate the combined estimated consumption from all aircons.
+        `Aircon.get_sensor_info()` must have been called first.
+        """
         total = 0
         for unit in self.ac:
             consumption = unit.get_consumption()
@@ -176,11 +199,12 @@ class BrickBatteryCharger:
         return total
 
     def set_ac_controls(self, target):
-        """The interesting part: adaptative controller to play
+        """
+        The interesting part: adaptive controller to play
         with the aircon buttons and hope that we land as close
         as possible within the target consumption range by the
         next set iteration.
-        Input parameters are:
+        Control parameters are:
         - set_interval duration between each AC set operation,
           for how reactive we want to be, but the aircons can
           take some time to adapt their consumption too
@@ -198,9 +222,9 @@ class BrickBatteryCharger:
         # Some sanity checks first
         for unit in self.ac:
             if unit.controls.get('pow', '-') != '1':
-                LOGGER.warning('Aircon in ' + unit.name + ' is turned off or irresponsive :(')
+                LOGGER.warning('Aircon in %s is turned off or irresponsive :(', unit.name)
             if unit.controls.get('mode', '-') != '4' and unit.controls.get('pow', '-') == '1':
-                LOGGER.error('Aircon in ' + unit.name + ' is not in heating mode, better stop here')
+                LOGGER.error('Aircon in %s is not in heating mode, better stop here', unit.name)
                 return
         # First rule of thumb for reactivity, action a temperature step per 200W difference
         steps = math.ceil(abs(target) / step_size)
@@ -221,28 +245,28 @@ class BrickBatteryCharger:
                     shum0 = 50
                     setting_change = True
                     target -= humidifier_consumption
-                    LOGGER.info('Turning humidification on in ' + self.ac[0].name)
+                    LOGGER.info('Turning humidification on in %s', self.ac[0].name)
                 if target > 0 and shum1 == 0:
                     shum1 = 50
                     setting_change = True
                     target -= humidifier_consumption
-                    LOGGER.info('Turning humidification on in ' + self.ac[1].name)
+                    LOGGER.info('Turning humidification on in %s', self.ac[1].name)
             # Recalculate temp increase steps
             steps = math.ceil(abs(target) / step_size)
-            for i in range(steps):
+            for _ in range(steps):
                 if min(stemp0, stemp1) == 30:
                     LOGGER.info('Both aircons set to max already, can\'t do anything')
                     break
                 if stemp0 < stemp1:
                     stemp0 += 1
                     setting_change = True
-                    LOGGER.info('Increasing temperature in ' + self.ac[0].name +
-                                ' to ' + str(stemp0))
+                    LOGGER.info('Increasing temperature in %s to %d',
+                                self.ac[0].name, stemp0)
                 else:
                     stemp1 += 1
                     setting_change = True
-                    LOGGER.info('Increasing temperature in ' + self.ac[1].name +
-                                ' to ' + str(stemp1))
+                    LOGGER.info('Increasing temperature in %s to %d',
+                                self.ac[1].name, stemp1)
         else:
             # Decrease AC consumption
             htemp0 = float(self.ac[0].sensors['htemp'])
@@ -256,28 +280,28 @@ class BrickBatteryCharger:
                     shum0 = 0
                     setting_change = True
                     target += humidifier_consumption
-                    LOGGER.info('Turning humidification off in ' + self.ac[0].name)
+                    LOGGER.info('Turning humidification off in %s', self.ac[0].name)
                 if target < 0 and shum1 > 0:
                     shum1 = 0
                     setting_change = True
                     target += humidifier_consumption
-                    LOGGER.info('Turning humidification off in ' + self.ac[1].name)
+                    LOGGER.info('Turning humidification off in %s', self.ac[1].name)
             # Recalculate temp increase steps
             steps = math.ceil(abs(target) / step_size)
-            for i in range(steps):
+            for _ in range(steps):
                 if max(stemp0 + 4 - htemp0, stemp1 + 4 - htemp1) <= 0:
                     LOGGER.info('Both aircons set to min temperature, can\'t do anything')
                     break
                 if stemp0 + 4 - htemp0 > stemp1 + 4 - htemp1:
                     stemp0 -= 1
                     setting_change = True
-                    LOGGER.info('Decreasing temperature in ' + self.ac[0].name +
-                                ' to ' + str(stemp0))
+                    LOGGER.info('Decreasing temperature in %s to %d',
+                                self.ac[0].name, stemp0)
                 else:
                     stemp1 -= 1
                     setting_change = True
-                    LOGGER.info('Decreasing temperature in ' + self.ac[1].name +
-                                ' to ' + str(stemp1))
+                    LOGGER.info('Decreasing temperature in %s to %d',
+                                self.ac[1].name, stemp1)
         if not setting_change:
             return
         # Set all changed temperature and humidity values now
@@ -312,18 +336,30 @@ class BrickBatteryCharger:
         return 0
 
     def set_sleep_mode(self):
+        """Mark the aircons as not settable and reduce polling frequency"""
         if self.is_sleep_mode:
             return
         self.is_sleep_mode = True
         self.read_interval *= 10
 
     def unset_sleep_mode(self):
+        """Mark the aircons as settable and reset polling frequency"""
         if not self.is_sleep_mode:
             return
         self.is_sleep_mode = False
         self.read_interval /= 10
 
     async def read_set_step(self):
+        """
+        Executed by the main loop to do:
+        - Poll all Aircons and SolarInfo asynchronously
+        - Manage if solar inverter just went to sleep or woke up
+        - Calculate aircons consumption
+        - Log analytics to a new CSV line
+        - Save CSV file (only at save interval)
+        - If not asleep, calculate target aircon consumption and
+          set aircons controls for this target (only at set interval)
+        """
         now = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
         LOGGER.info(now)
         [(grid_import, pv_generation), *_] = await asyncio.gather(
@@ -366,6 +402,7 @@ class BrickBatteryCharger:
             if self.csv_next_save <= 0:
                 self.csv_next_save = self.csv_save_interval
                 self.csv.save()
+
         if not self.is_sleep_mode:
             target = self.calculate_target(grid_import, ac_consumption)
             self.next_set -= self.read_interval
