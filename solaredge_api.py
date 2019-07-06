@@ -2,6 +2,7 @@
 Module for the SolarEdge Web API to get realtime PV generation, load and grid import
 pushed by the inverter and energy monitor.
 """
+from datetime import datetime
 import logging
 import uncurl
 
@@ -26,10 +27,17 @@ class SolarInfo:
         curl_filename text file containing the curl command used to retrieve
                           currentPowerFlow data
         """
+        self.pv_generation = float('NaN')
+        self.grid_import = float('NaN')
+        # we use this to check if the SolarEdge stops updating
+        # (server problem, no fresh data from inverter)
+        # if polled every 3 seconds and now - last_changed > 30 secs
+        # values are getting dubious
+        self.last_changed = None
         self._session = None
         with open(curl_filename) as curl_file:
             curl_command = curl_file.read()
-            self.cpf_context = uncurl.parse_context(curl_command)
+            self._cpf_context = uncurl.parse_context(curl_command)
 
     def _get_session(self):
         """
@@ -83,10 +91,10 @@ class SolarInfo:
         """
         try:
             async with await self._get_session().request(
-                    method=self.cpf_context.method,
-                    url=self.cpf_context.url,
-                    headers=self.cpf_context.headers,
-                    cookies=self.cpf_context.cookies) as response:
+                    method=self._cpf_context.method,
+                    url=self._cpf_context.url,
+                    headers=self._cpf_context.headers,
+                    cookies=self._cpf_context.cookies) as response:
 
                 json = await response.json()
                 grid_import = int(json['siteCurrentPowerFlow']['GRID']['currentPower'] * 1000)
@@ -98,7 +106,13 @@ class SolarInfo:
                             is_export = True
                             break
                 LOGGER.debug('%s %dW', 'Exporting' if is_export else 'Importing', grid_import)
-                return (-grid_import if is_export else grid_import), pv_generation
+                if is_export:
+                    grid_import = -grid_import
+                if grid_import != self.grid_import or pv_generation != self.pv_generation:
+                    self.last_changed = datetime.now()
+                    self.grid_import = grid_import
+                    self.pv_generation = pv_generation
+                return grid_import, pv_generation
         except Exception as ex:
             LOGGER.error('Call to SolarEdge API for current power flow failed: %s', ex)
             return float('NaN'), float('NaN')

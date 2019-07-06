@@ -3,6 +3,7 @@ Module for the Daikin BRP072A42 WiFi Control unit API
 This module controls one split air conditioning unit.
 """
 
+import math
 import logging
 import urllib.parse
 import aiohttp
@@ -165,3 +166,18 @@ class Aircon:
                 Aircon.mode.get(self.controls.get('mode', '-'), '-') + ' ' +
                 self.controls.get('stemp', '-') + 'ºC, ' +
                 self.controls.get('shum', '-') + '% RH')
+
+    def json_dict(self):
+        """Return dictionary of only useful objects"""
+        consumption = self.get_consumption()
+        return {
+            'name': self.name,
+            'consumption': consumption if not math.isnan(consumption) else '-',
+            'power': Aircon.power.get(self.controls.get('pow', '-'), '-'),
+            'mode': Aircon.mode.get(self.controls.get('mode', '-'), '-'),
+            'stemp': self.controls.get('stemp', '-'),
+            'shum': self.controls.get('shum', '-'),
+            'htemp': self.sensors.get('htemp', '-'),
+            'otemp': self.sensors.get('otemp', '-'),
+            'cmpfreq': self.sensors.get('cmpfreq', '-')
+            }
