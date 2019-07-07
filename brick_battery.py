@@ -10,7 +10,7 @@ fit within a pre-set import range.
 """
 
 import asyncio
-from datetime import datetime
+import datetime
 import logging
 import math
 import os
@@ -48,7 +48,7 @@ def main():
     sleep_mode_settings = {
         'pow': '1',
         'mode': '4',
-        'stemp': '22.0',
+        'stemp': '22',
         'shum': '0'
     }
 
@@ -68,20 +68,22 @@ def main():
                     ]
     csv = CSVLogger('energy_data.csv', data_to_save)
 
-    server = BrickBatteryHTTPServer(8080)
+    # Use 'localhost' to only accept connections from this host
+    server = BrickBatteryHTTPServer('0.0.0.0', 8080)
 
-    # don't read less often than 3s otherwise SolarEdge drops connection
+    # don't read less often than 5s otherwise SolarEdge drops connection
     bbc = BrickBatteryCharger(aircons,
                               solar,
                               read_interval=3,
                               set_interval=60,
-                              min_load=200,
-                              max_load=700,
+                              min_load=0,
+                              max_load=400,
                               server=server,
                               csv=csv,
                               sleep_mode_settings=sleep_mode_settings,
-                              wakeup_threshold=200,
-                              dryrun_mode=True)
+                              sleep_threshold=200,
+                              wakeup_threshold=500,
+                              operation=True)
     bbc.charge()
 
 class BrickBatteryCharger:
@@ -105,7 +107,7 @@ class BrickBatteryCharger:
     """
     def __init__(self, aircons, solar, set_interval, read_interval,
                  min_load, max_load, server, csv=None, sleep_mode_settings={},
-                 wakeup_threshold=200, dryrun_mode=False):
+                 sleep_threshold=0, wakeup_threshold=200, operation=True):
         """
         Args:
             aircons a list of Aircon instances
@@ -121,17 +123,23 @@ class BrickBatteryCharger:
                      tolerance and avoids changing settings continuously if
                      household comsumption or PV generation fluctuate often.
             server a BrickBatteryHTTPServer instance to expose controls and
-                   status through a web PI
+                   status through a web API
             csv an optional CSVLogger instance to write analytics information to,
                 defaults to None if no logging is required
             sleep_mode_settings a set of Aircon settings to send to each aircon
                                 unit when PV generation is stopped in the evening
-            wakeup_threshold the minimum PV generation in watts from the inverter
-                             before sleep_mode_settings are ignored and the brick
-                             loader starts controlling the aircons
-            dry_run set to true to test your system after changes without
+            sleep_threshold the PV generation in watts from the inverter at which
+                            the brick loader stops controlling the aircons and
+                            sleep_mode_settings are set
+                            Must be lower than wakeup_threshold
+            wakeup_threshold the PV generation in watts from the inverter at which
+                             sleep_mode_settings are ignored and the brick loader
+                             starts controlling the aircons
+                             Must be greater than sleep_threshold
+            operation set to False to test your system after changes without
                     interfering with the household operation.
         """
+        now = datetime.datetime.now()
         self.ac = aircons
         self.ac_consumption = float('NaN')
         self.solar = solar
@@ -141,15 +149,16 @@ class BrickBatteryCharger:
         self.last_updated = None
         self.set_interval = set_interval
         self.read_interval = read_interval
-        self.next_set = 10
+        self.last_set = None
         self.csv_save_interval = 120
-        self.csv_next_save = self.csv_save_interval
-        self.dryrun = dryrun_mode
+        self.csv_last_save = now
+        self.operation = operation
         self.min_load = min_load
         self.max_load = max_load
         self.is_sleep_mode = False
         self.sleep_mode_settings = sleep_mode_settings
         self.wakeup_threshold = wakeup_threshold
+        self.sleep_threshold = sleep_threshold
 
     def charge(self):
         """
@@ -157,21 +166,25 @@ class BrickBatteryCharger:
         then run the main loop (using the event loop...)
         """
         loop = asyncio.get_event_loop()
-        if self.dryrun:
-            LOGGER.warning('Running dry-run mode: not sending any commands to aircons')
+        if not self.operation:
+            LOGGER.warning('Operation mode off: not sending any commands to aircons')
         if self.csv:
             LOGGER.info('Logging runtime analytics to %s', self.csv.file.name)
         [(_, pv_generation), *_] = loop.run_until_complete(asyncio.gather(
             self.solar.check_se_load(),
             *[unit.get_basic_info() for unit in self.ac],
             *self.get_load_ac_status_requests()))
-        self.last_updated = datetime.now()
-        if pv_generation == 0:
+        now = datetime.datetime.now()
+        self.last_updated = now
+        if pv_generation <= self.sleep_threshold:
             LOGGER.info('Inverter off, started in sleep mode')
-            self.set_sleep_mode()
+            self.is_sleep_mode = True
+        else:
+            # Schedule first set in 3 read steps
+            self.last_set = now - datetime.timedelta(
+                seconds=self.set_interval - 3 * self.read_interval)
         for unit in self.ac:
             LOGGER.info(unit)
-        # TODO init server from here and add it to the main loop
         loop.run_until_complete(self.server.start())
         loop.run_until_complete(self.main_loop())
 
@@ -184,7 +197,9 @@ class BrickBatteryCharger:
         """
         while True:
             try:
-                await asyncio.gather(self.read_set_step(), asyncio.sleep(self.read_interval))
+                await asyncio.gather(
+                    self.read_set_step(),
+                    asyncio.sleep(self.read_interval * (10 if self.is_sleep_mode else 1)))
             except Exception as ex:
                 LOGGER.error('Something went wrong, skip this run loop call, cause: %s', ex)
                 LOGGER.error(traceback.format_exc())
@@ -323,8 +338,8 @@ class BrickBatteryCharger:
         self.ac[0].controls['shum'] = str(shum0)
         self.ac[1].controls['stemp'] = str(stemp1)
         self.ac[1].controls['shum'] = str(shum1)
-        if self.dryrun:
-            LOGGER.warning('Running in dry-run mode: no set action sent')
+        if not self.operation:
+            LOGGER.warning('Operation mode off: no set action sent')
             return
         asyncio.gather(*[unit.set_control_info() for unit in self.ac])
 
@@ -350,20 +365,6 @@ class BrickBatteryCharger:
         # or we're exporting but we've already turned the AC to max capacity
         return 0
 
-    def set_sleep_mode(self):
-        """Mark the aircons as not settable and reduce polling frequency"""
-        if self.is_sleep_mode:
-            return
-        self.is_sleep_mode = True
-        self.read_interval *= 10
-
-    def unset_sleep_mode(self):
-        """Mark the aircons as settable and reset polling frequency"""
-        if not self.is_sleep_mode:
-            return
-        self.is_sleep_mode = False
-        self.read_interval /= 10
-
     async def read_set_step(self):
         """
         Executed by the main loop to do:
@@ -375,32 +376,33 @@ class BrickBatteryCharger:
         - If not asleep, calculate target aircon consumption and
           set aircons controls for this target (only at set interval)
         """
-        now = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
-        LOGGER.info(now)
+        start_step_time_string = datetime.datetime.now().strftime("%d/%m/%Y %H:%M:%S")
+        LOGGER.info(start_step_time_string)
         [(grid_import, pv_generation), *_] = await asyncio.gather(
             self.solar.check_se_load(),
             *self.get_load_ac_status_requests())
-        self.last_updated = datetime.now()
+        now = datetime.datetime.now()
+        self.last_updated = now
         if grid_import < 0:
-            LOGGER.info('PV generating %dW Exporting %.0fW', pv_generation, -grid_import)
+            LOGGER.info('PV generating %.0fW Exporting %.0fW', pv_generation, -grid_import)
         else:
-            LOGGER.info('PV generating %dW Importing %.0fW', pv_generation, grid_import)
+            LOGGER.info('PV generating %.0fW Importing %.0fW', pv_generation, grid_import)
 
-        if pv_generation == 0 and not self.is_sleep_mode:
+        if pv_generation <= self.sleep_threshold and not self.is_sleep_mode:
             LOGGER.info('PV generation just stopped, entering sleep mode')
-            self.set_sleep_mode()
+            self.is_sleep_mode = True
             for unit in self.ac:
                 unit.controls = self.sleep_mode_settings
-                unit.set_control_info()
+            asyncio.gather(*[unit.set_control_info() for unit in self.ac])
         elif pv_generation >= self.wakeup_threshold and self.is_sleep_mode:
             LOGGER.info('PV generation just starting, leaving sleep mode')
-            self.unset_sleep_mode()
+            self.is_sleep_mode = False
 
         self.estimate_ac_consumption()
         LOGGER.info('Estimated combined A/C consumption %.0fW', self.ac_consumption)
         # Make sure values match the order of CSVLogger.data_to_save
         if self.csv:
-            self.csv.write([now,
+            self.csv.write([start_step_time_string,
                             pv_generation,
                             grid_import,
                             self.ac_consumption,
@@ -414,21 +416,26 @@ class BrickBatteryCharger:
                             self.ac[0].controls.get('shum', ''),
                             self.ac[1].controls.get('shum', ''),
                             ])
-            self.csv_next_save -= self.read_interval
-            if self.csv_next_save <= 0:
-                self.csv_next_save = self.csv_save_interval
+            if (now - self.csv_last_save
+                    >= datetime.timedelta(0, self.csv_save_interval)):
+                self.csv_last_save = now
                 self.csv.save()
 
         if not self.is_sleep_mode:
             target = self.calculate_target(grid_import, self.ac_consumption)
-            self.next_set -= self.read_interval
-            LOGGER.info('Target is %.0f (import in [%d, %d]) ' +
-                        ('next set in ' + str(self.next_set) + ' seconds \n'
-                         if self.next_set > 0
-                         else 'setting now \n'),
+            next_set = (self.last_set
+                        + datetime.timedelta(0, self.set_interval)
+                        - now).total_seconds()
+            LOGGER.info('Target is %.0f (import in [%d, %d]) ',
                         target, self.min_load, self.max_load)
-            if self.next_set <= 0 and target != 0 and not math.isnan(target):
-                self.next_set = self.set_interval
+            if next_set > 0:
+                LOGGER.info('next set in %.0f seconds \n', next_set)
+            elif target != 0 and not math.isnan(target):
+                LOGGER.info('setting now\n')
+            else:
+                LOGGER.info('setting anytime\n')
+            if next_set <= 0 and target != 0 and not math.isnan(target):
+                self.last_set = now
                 LOGGER.info("Setting A/C controls\n")
                 await self.set_ac_controls(target)
 

@@ -12,7 +12,7 @@ LOGGER = logging.getLogger(__name__)
 
 class SolarInfo:
     """
-    The SolarInfo class manages a persistent secure HTTP connection to the 
+    The SolarInfo class manages a persistent secure HTTP connection to the
     Solaredge API and allows to retrieve data asynchronously.
 
     Just store the curl command with parameters used to get the current power flow
