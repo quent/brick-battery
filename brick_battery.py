@@ -212,7 +212,7 @@ class BrickBatteryCharger:
                 total += consumption
         self.ac_consumption = total
 
-    def set_ac_controls(self, target):
+    async def set_ac_controls(self, target):
         """
         The interesting part: adaptive controller to play
         with the aircon buttons and hope that we land as close
@@ -326,8 +326,7 @@ class BrickBatteryCharger:
         if self.dryrun:
             LOGGER.warning('Running in dry-run mode: no set action sent')
             return
-        for unit in self.ac:
-            unit.set_control_info()
+        asyncio.gather(*[unit.set_control_info() for unit in self.ac])
 
     def calculate_target(self, load, consumption):
         """
@@ -431,7 +430,7 @@ class BrickBatteryCharger:
             if self.next_set <= 0 and target != 0 and not math.isnan(target):
                 self.next_set = self.set_interval
                 LOGGER.info("Setting A/C controls\n")
-                self.set_ac_controls(target)
+                await self.set_ac_controls(target)
 
 if __name__ == '__main__':
     main()

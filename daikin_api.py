@@ -86,7 +86,8 @@ class Aircon:
         """
         LOGGER.debug(self.host + path)
         try:
-            async with await self._get_session().get(self.host + path, dic) as response:
+            async with await self._get_session().get(
+                    self.host + path + '?' + urllib.parse.urlencode(dic)) as response:
                 text = await response.text()
                 ret_dic = dict(x.split('=') for x in text.split(','))
                 if 'ret' not in ret_dic or ret_dic['ret'].upper() != 'OK':
