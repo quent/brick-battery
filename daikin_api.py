@@ -58,7 +58,7 @@ class Aircon:
         if self._session is None:
             self._session = aiohttp.ClientSession(
                 raise_for_status=True,
-                conn_timeout=4)
+                conn_timeout=6)
         return self._session
 
     async def api_get(self, path):

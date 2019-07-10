@@ -391,9 +391,12 @@ class BrickBatteryCharger:
         if pv_generation <= self.sleep_threshold and not self.is_sleep_mode:
             LOGGER.info('PV generation just stopped, entering sleep mode')
             self.is_sleep_mode = True
-            for unit in self.ac:
-                unit.controls = self.sleep_mode_settings
-            asyncio.gather(*[unit.set_control_info() for unit in self.ac])
+            if not self.operation:
+                LOGGER.warning('Operation mode off: no set action sent')
+            else:
+                for unit in self.ac:
+                    unit.controls = self.sleep_mode_settings
+                asyncio.gather(*[unit.set_control_info() for unit in self.ac])
         elif pv_generation >= self.wakeup_threshold and self.is_sleep_mode:
             LOGGER.info('PV generation just starting, leaving sleep mode')
             self.is_sleep_mode = False
@@ -423,9 +426,12 @@ class BrickBatteryCharger:
 
         if not self.is_sleep_mode:
             target = self.calculate_target(grid_import, self.ac_consumption)
-            next_set = (self.last_set
-                        + datetime.timedelta(0, self.set_interval)
-                        - now).total_seconds()
+            if self.last_set:
+                next_set = (self.last_set
+                            + datetime.timedelta(0, self.set_interval)
+                            - now).total_seconds()
+            else:
+                next_set = 0
             LOGGER.info('Target is %.0f (import in [%d, %d]) ',
                         target, self.min_load, self.max_load)
             if next_set > 0:

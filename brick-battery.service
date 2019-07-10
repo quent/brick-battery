@@ -1,0 +1,16 @@
+[Unit]
+Description=Brick Battery Charger - Aircon controller driven by PV generation
+After=network-online.target
+
+[Service]
+Type=simple
+User=osmc
+Group=osmc
+WorkingDirectory=/home/osmc/brick-battery
+ExecStart=/home/osmc/brick-battery/brick_battery.py
+RestartSec=10
+Restart=always
+SyslogIdentifier=brick-battery
+
+[Install]
+WantedBy=multi-user.target
