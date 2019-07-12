@@ -257,10 +257,10 @@ class BrickBatteryCharger:
                 return
         # First rule of thumb for reactivity, action a temperature step per 200W difference
         steps = math.ceil(abs(target) / step_size)
-        stemp0 = float(self.ac[0].controls['stemp'])
-        stemp1 = float(self.ac[1].controls['stemp'])
-        shum0 = int(self.ac[0].controls['shum'])
-        shum1 = int(self.ac[1].controls['shum'])
+        stemp0 = float(self.ac[0].controls.get('stemp', 'nan'))
+        stemp1 = float(self.ac[1].controls.get('stemp', 'nan'))
+        shum0 = int(self.ac[0].controls.get('shum', '0'))
+        shum1 = int(self.ac[1].controls.get('shum', '0'))
         if target > 0:
             # Increase AC consumption. Sometimes when AC are turned off
             # at the compressor, it can take them a while to get going
@@ -298,8 +298,8 @@ class BrickBatteryCharger:
                                 self.ac[1].name, stemp1)
         else:
             # Decrease AC consumption
-            htemp0 = float(self.ac[0].sensors['htemp'])
-            htemp1 = float(self.ac[1].sensors['htemp'])
+            htemp0 = float(self.ac[0].sensors.get('htemp', 'nan'))
+            htemp1 = float(self.ac[1].sensors.get('htemp', 'nan'))
             temp_potential = max(stemp0 + 4 - htemp0, 0) + max(stemp1 + 4 - htemp1, 0)
             # Temp potentiel is trickier on the way down because the aircon will shut
             # all heating is we set heating about 4ºC less than room temperature
@@ -334,8 +334,12 @@ class BrickBatteryCharger:
         if not setting_change:
             return
         # Set all changed temperature and humidity values now
+        self.ac[0].controls['pow'] = self.ac[0].controls.get('pow', '1')
+        self.ac[0].controls['mode'] = '4'
         self.ac[0].controls['stemp'] = str(stemp0)
         self.ac[0].controls['shum'] = str(shum0)
+        self.ac[1].controls['pow'] = self.ac[1].controls.get('pow', '1')
+        self.ac[1].controls['mode'] = '4'
         self.ac[1].controls['stemp'] = str(stemp1)
         self.ac[1].controls['shum'] = str(shum1)
         if not self.operation:
