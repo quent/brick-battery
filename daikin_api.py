@@ -38,8 +38,6 @@ class Aircon:
     power = {'0': 'OFF',
              '1': 'ON'}
 
-    MAX_AC_CONSUMPTION = 1400
-
     def __init__(self, num, host):
         self.num = num
         self.name = 'aircon' + str(num)
@@ -49,6 +47,11 @@ class Aircon:
         self.controls = {}
         self.command_to_send = False
         self._session = None
+        # Consumption information specific to the physical unit
+        # All values in watts
+        self.max_consumption = 1400
+        self.consumption_per_degree = 200
+        self.humidifier_consumption = 200
 
     def _get_session(self):
         """
@@ -71,6 +74,7 @@ class Aircon:
         try:
             async with await self._get_session().get(self.host + path) as response:
                 text = await response.text()
+                LOGGER.debug('%s returned: %s', response.request_info.url, text)
                 return dict(x.split('=') for x in text.split(','))
         except Exception as ex:
             LOGGER.error('aircon api get request error: %s', ex)
@@ -92,7 +96,9 @@ class Aircon:
                 ret_dic = dict(x.split('=') for x in text.split(','))
                 if 'ret' not in ret_dic or ret_dic['ret'].upper() != 'OK':
                     LOGGER.error('aircon api set request returned with %s, request was %s',
-                                 response.text, response.request.path_url)
+                                 text, response.request_info.url)
+                else:
+                    LOGGER.debug('%s returned: %s', response.request_info.url, text)
                 return ret_dic
         except Exception as ex:
             LOGGER.error('aircon api set request error: %s', ex)

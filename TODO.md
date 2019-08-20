@@ -1,7 +1,5 @@
 # TODO
 
-- While BrickBatteryCharger lets us define a list of Aircons to manage,
-it has hard-coded assumptions that there are exactly 2 of them
 - Configuration for initial setup is hard-coded. Implement config file
 to read from
 - Implement a web API to provide various functionalities:

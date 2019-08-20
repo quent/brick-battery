@@ -89,6 +89,7 @@ class SolarInfo:
             "LOAD":{"status":"Active","currentPower":2.2},
             "PV":{"status":"Active","currentPower":2.39}}}
         """
+        LOGGER.debug(self._cpf_context.url)
         try:
             async with await self._get_session().request(
                     method=self._cpf_context.method,
@@ -97,6 +98,7 @@ class SolarInfo:
                     cookies=self._cpf_context.cookies) as response:
 
                 json = await response.json()
+                LOGGER.debug('%s returned: %s', response.request_info.url, json)
                 grid_import = int(json['siteCurrentPowerFlow']['GRID']['currentPower'] * 1000)
                 pv_generation = int(json['siteCurrentPowerFlow']['PV']['currentPower'] * 1000)
                 is_export = False
@@ -105,7 +107,6 @@ class SolarInfo:
                         if key == 'to' and value.lower() == 'grid':
                             is_export = True
                             break
-                LOGGER.debug('%s %dW', 'Exporting' if is_export else 'Importing', grid_import)
                 if is_export:
                     grid_import = -grid_import
                 if grid_import != self.grid_import or pv_generation != self.pv_generation:

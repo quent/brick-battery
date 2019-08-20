@@ -33,8 +33,8 @@ def main():
     web API.
     """
     logging.basicConfig(level=logging.INFO)
-    logging.getLogger("urllib3").setLevel(logging.INFO)
-    logging.getLogger("aiohttp").setLevel(logging.INFO)
+    #logging.getLogger('daikin_api').setLevel(logging.DEBUG)
+    #logging.getLogger('solaredge_api').setLevel(logging.DEBUG)
 
 
     aircons = [Aircon(0, 'http://192.168.1.101'),
@@ -242,12 +242,7 @@ class BrickBatteryCharger:
         - humidifier_consumption used to estimate its impact to
           get closer to the target
         """
-        # Watts per temperature +/- button press
-        step_size = 200
-        # Watts when humidifier is turned on
-        humidifier_consumption = 200
         setting_change = False
-
         # Some sanity checks first
         for unit in self.ac:
             if unit.controls.get('pow', '-') != '1':
@@ -255,116 +250,145 @@ class BrickBatteryCharger:
             if unit.controls.get('mode', '-') != '4' and unit.controls.get('pow', '-') == '1':
                 LOGGER.error('Aircon in %s is not in heating mode, better stop here', unit.name)
                 return
-        # First rule of thumb for reactivity, action a temperature step per 200W difference
-        steps = math.ceil(abs(target) / step_size)
-        stemp0 = float(self.ac[0].controls.get('stemp', 'nan'))
-        stemp1 = float(self.ac[1].controls.get('stemp', 'nan'))
-        shum0 = int(self.ac[0].controls.get('shum', '0'))
-        shum1 = int(self.ac[1].controls.get('shum', '0'))
-        if target > 0:
-            # Increase AC consumption. Sometimes when AC are turned off
-            # at the compressor, it can take them a while to get going
-            # and then they crank up like mad for another minute before
-            # winding down to a steady rate
-            temp_potential = (30 - stemp0 + 30 - stemp1)
-            # How many times can we still press the temp+ buttons?
-            if temp_potential < steps:
-                # Increasing temperature won't be sufficient, time to turn on humidifier
-                if shum0 == 0:
-                    shum0 = 50
-                    setting_change = True
-                    target -= humidifier_consumption
-                    LOGGER.info('Turning humidification on in %s', self.ac[0].name)
-                if target > 0 and shum1 == 0:
-                    shum1 = 50
-                    setting_change = True
-                    target -= humidifier_consumption
-                    LOGGER.info('Turning humidification on in %s', self.ac[1].name)
-            # Recalculate temp increase steps
-            steps = math.ceil(abs(target) / step_size)
-            for _ in range(steps):
-                if min(stemp0, stemp1) == 30:
-                    LOGGER.info('Both aircons set to max already, can\'t do anything')
-                    break
-                if stemp0 < stemp1:
-                    stemp0 += 1
-                    setting_change = True
-                    LOGGER.info('Increasing temperature in %s to %d',
-                                self.ac[0].name, stemp0)
-                else:
-                    stemp1 += 1
-                    setting_change = True
-                    LOGGER.info('Increasing temperature in %s to %d',
-                                self.ac[1].name, stemp1)
-        else:
-            # Decrease AC consumption
-            htemp0 = float(self.ac[0].sensors.get('htemp', 'nan'))
-            htemp1 = float(self.ac[1].sensors.get('htemp', 'nan'))
-            temp_potential = max(stemp0 + 4 - htemp0, 0) + max(stemp1 + 4 - htemp1, 0)
-            # Temp potentiel is trickier on the way down because the aircon will shut
-            # all heating is we set heating about 4ºC less than room temperature
-            if temp_potential < steps:
-                # Decreasing temperature won't be sufficient, time to turn off humidifier
-                if shum0 > 0:
-                    shum0 = 0
-                    setting_change = True
-                    target += humidifier_consumption
-                    LOGGER.info('Turning humidification off in %s', self.ac[0].name)
-                if target < 0 and shum1 > 0:
-                    shum1 = 0
-                    setting_change = True
-                    target += humidifier_consumption
-                    LOGGER.info('Turning humidification off in %s', self.ac[1].name)
-            # Recalculate temp increase steps
-            steps = math.ceil(abs(target) / step_size)
-            for _ in range(steps):
-                if max(stemp0 + 4 - htemp0, stemp1 + 4 - htemp1) <= 0:
-                    LOGGER.info('Both aircons set to min temperature, can\'t do anything')
-                    break
-                if stemp0 + 4 - htemp0 > stemp1 + 4 - htemp1:
-                    stemp0 -= 1
-                    setting_change = True
-                    LOGGER.info('Decreasing temperature in %s to %d',
-                                self.ac[0].name, stemp0)
-                else:
-                    stemp1 -= 1
-                    setting_change = True
-                    LOGGER.info('Decreasing temperature in %s to %d',
-                                self.ac[1].name, stemp1)
+        setting_change = self.increase_temp_for_target(target) if target > 0 \
+                         else self.decrease_temp_for_target(target)
         if not setting_change:
             return
-        # Set all changed temperature and humidity values now
-        self.ac[0].controls['pow'] = self.ac[0].controls.get('pow', '1')
-        self.ac[0].controls['mode'] = '4'
-        self.ac[0].controls['stemp'] = str(stemp0)
-        self.ac[0].controls['shum'] = str(shum0)
-        self.ac[1].controls['pow'] = self.ac[1].controls.get('pow', '1')
-        self.ac[1].controls['mode'] = '4'
-        self.ac[1].controls['stemp'] = str(stemp1)
-        self.ac[1].controls['shum'] = str(shum1)
         if not self.operation:
             LOGGER.warning('Operation mode off: no set action sent')
             return
         asyncio.gather(*[unit.set_control_info() for unit in self.ac])
+
+    def increase_temp_for_target(self, target):
+        """
+        Modify settings of AC to increase their consumption.
+        It only modifies the settings of the ac controls but does not
+        send the actual command to the units.
+
+        Settings are modified in sequence to adjust estimated consumption
+        and the consumption target is updated after each iteration until
+        that target is reached, or cannot be reached because consumption
+        is already at a maximum:
+        - First increase temperature evenly across all active aircons
+        - If all aircons at maximum temperature, turn humidification on
+
+        Return True if settings were actually modified in which case
+        the caller may send the commands to aircons.
+        """
+        setting_change = False
+        active_units = [unit for unit in self.ac if
+                        'stemp' in unit.controls and 'shum' in unit.controls and
+                        'htemp' in unit.sensors and unit.controls.get('pow', '-') == '1']
+        stemp = [float(unit.controls['stemp']) for unit in active_units]
+        shum = [int(unit.controls['shum']) for unit in active_units]
+        while target > 0:
+            min_temp, min_index = min((temp, index) for (index, temp) in enumerate(stemp))
+            # Note: stemp, while being a float, only gets int and half-int values through
+            # additions and substractions: equals-comparison and modulus are safe
+            if min_temp >= 30:
+                LOGGER.info('All aircons set to max already')
+                break
+            # If temperature set to a half degree, first try to set it back to integer
+            step = 1 if stemp[min_index] % 1 == 0 else 0.5
+            stemp[min_index] += step
+            target -= step * active_units[min_index].consumption_per_degree
+            setting_change = True
+            LOGGER.info('Increasing temperature in %s to %d',
+                        active_units[min_index].name, stemp[min_index])
+
+        for index, unit in enumerate(active_units):
+            if target <= 0:
+                break
+            # Increasing temperature not sufficient, time to turn on humidifier
+            if shum[index] == 0:
+                shum[index] = 50
+                setting_change = True
+                target -= unit.humidifier_consumption
+                LOGGER.info('Turning humidification on in %s', unit.name)
+
+        if setting_change:
+            for index, unit in enumerate(active_units):
+                unit.controls['stemp'] = str(stemp[index])
+                unit.controls['shum'] = str(shum[index])
+        return setting_change
+
+    def decrease_temp_for_target(self, target):
+        """
+        Modify settings of AC to decrease their consumption.
+        It only modifies the settings of the ac controls but does not
+        send the actual command to the units.
+
+        Settings are modified in sequence to adjust estimated consumption
+        and the consumption target is updated after each iteration until
+        that target is reached, or cannot be reached because consumption
+        is already at a minimum:
+        - First decrease temperature evenly across all active aircons
+        - If all aircons at minimum temperature, turn humidification off
+
+        Return True if settings were actually modified in which case
+        the caller may send the commands to aircons.
+        """
+        setting_change = False
+        active_units = [unit for unit in self.ac if
+                        'stemp' in unit.controls and 'shum' in unit.controls and
+                        'htemp' in unit.sensors and unit.controls.get('pow', '-') == '1']
+        stemp = [float(unit.controls['stemp']) for unit in active_units]
+        htemp = [float(unit.sensors['htemp']) for unit in active_units]
+        shum = [int(unit.controls['shum']) for unit in active_units]
+        # Aircon unit shuts at set temp = room temp - 4º but then takes up
+        # to 2 minutes to start again, setting at room temp - 3.5º keeps
+        # the aircon consuming just a little bit but allows for a much faster restart
+        while target < 0:
+            max_diff, max_index = max((st - ht + 3.5, index)
+                                      for (index, [st, ht]) in enumerate(zip(stemp, htemp)))
+            # Note: stemp, while being a float, only gets int and half-int values through
+            # additions and substractions: equals-comparison and modulus are safe
+            if max_diff <= 0:
+                LOGGER.info('All aircons set to min already, can\'t do anything')
+                break
+            # Decrease by half a degree if temperature if the current set temperature
+            # is a half-degree value or if we're just close to the 3.5º difference mark
+            step = 1 if stemp[max_index] % 1 == 0 and max_diff >= 1 else 0.5
+            stemp[max_index] -= step
+            target += step * active_units[max_index].consumption_per_degree
+            setting_change = True
+            LOGGER.info('Increasing temperature in %s to %d',
+                        active_units[max_index].name, stemp[max_index])
+
+        for index, unit in enumerate(active_units):
+            # Temperature low enough, time to turn off humidifier
+            # It might take some time for this action to affect consumption
+            # so don't count it against the target
+            if stemp[index] <= 26 and shum[index] != 0:
+                shum[index] = 0
+                setting_change = True
+                LOGGER.info('Turning humidification off in %s', unit.name)
+
+        if setting_change:
+            for index, unit in enumerate(active_units):
+                unit.controls['stemp'] = str(stemp[index])
+                unit.controls['shum'] = str(shum[index])
+        return setting_change
 
     def calculate_target(self, load, consumption):
         """
         Target here is difference consumption wanted from AC
         Negative target to decrease consumption, positive to increase it
         """
-        avg_load_target = (self.max_load + self.min_load) / 2
         if math.isnan(load) or math.isnan(consumption):
             return float('NaN')
         if self.min_load < load < self.max_load:
             # Don't bother touching a thing if importing within
             # acceptable load range
             return 0
+        avg_load_target = (self.max_load + self.min_load) / 2
         if load > self.max_load and consumption > 0:
             # We need to reduce AC consumption
             return -min(load - avg_load_target, consumption)
-        if load < self.min_load and consumption < len(self.ac) * Aircon.MAX_AC_CONSUMPTION:
+        max_total_ac_consumption = sum([unit.max_consumption for unit in self.ac])
+        if load < self.min_load and consumption < max_total_ac_consumption:
             # We need to increase AC consumption
-            return min(avg_load_target - load, len(self.ac) * Aircon.MAX_AC_CONSUMPTION)
+            return min(avg_load_target - load, max_total_ac_consumption)
         # We cannot help because either the AC is off and we're over consuming
         # or we're exporting but we've already turned the AC to max capacity
         return 0

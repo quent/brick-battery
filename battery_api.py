@@ -56,7 +56,7 @@ class BrickBatteryHTTPServer:
         await site.start()
         LOGGER.info('Web API listening to %s:%s', self.host, self.port)
 
-    async def status(self, request):
+    async def status(self, _):
         """Pass all details about current state"""
         ctrl = self.controller
         json = {'operation': ctrl.operation,
@@ -131,7 +131,7 @@ class BrickBatteryHTTPServer:
             invalid_parameters['set_interval'] = 'must be at least 10 seconds'
         return config, invalid_parameters
 
-    async def hello(self, request):
+    async def hello(self, _):
         """Dumb hello welcome handler for server root"""
         return web.Response(text='Hello, Brick Battery here!\n'
                             'Use /status and /controls to have fun')
@@ -209,7 +209,7 @@ def parse_ac_stemp(key, value, config, invalid_parameters):
 def parse_ac_shum(key, value, config, invalid_parameters):
     """Add key with checked value to config or with error message to invalid_parameters"""
     is_num, num = to_int(value)
-    if is_num and 0 <= num <= 100 and num % 5 ==0:
+    if is_num and 0 <= num <= 100 and num % 5 == 0:
         config[key] = str(num)
     else:
         invalid_parameters[key] = 'invalid value, must be an integer from 0 to 100 '\
