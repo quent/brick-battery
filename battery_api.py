@@ -6,6 +6,7 @@ via a web API
 import datetime
 import logging
 import math
+from ruamel.yaml import YAML
 from aiohttp import web
 
 LOGGER = logging.getLogger('battery_api')
@@ -18,16 +19,19 @@ class BrickBatteryHTTPServer:
     control settings such as on/off, target min and max grid load,
     threshold for waking up the controller.
     """
-    def __init__(self, host, port):
+    def __init__(self, host, port, config_file):
         """
         Args:
         host the host/IP on which to accept connection
              ('localhost' for local connections only,
               None to accept connection from anywhere)
         port the port number to bind the listening socket to
+        config_file the name of the yaml config file to save
+        settings changes. Use empty/None not to update the config
         """
         self.host = host
         self.port = port
+        self.config_file = config_file
         app = web.Application()
         app.add_routes([web.get('/', self.hello),
                         web.get('/status', self.status),
@@ -59,7 +63,7 @@ class BrickBatteryHTTPServer:
     async def status(self, _):
         """Pass all details about current state"""
         ctrl = self.controller
-        json = {'operation': ctrl.operation,
+        json = {'operation': ctrl.config['operation'],
                 'last_updated': ctrl.last_updated,
                 'last_set': ctrl.last_set,
                 'is_sleep_mode': ctrl.is_sleep_mode,
@@ -72,18 +76,27 @@ class BrickBatteryHTTPServer:
         """Set controls """
         LOGGER.info("request query dict=%s",
                     ', '.join(['{}: {}'.format(k, v) for k, v in request.query.items()]))
-        config, invalid_parameters = self.parse_controls_query(request.query.items())
+        config_json, invalid_parameters = self.parse_controls_query(request.query.items())
         if invalid_parameters:
             return web.json_response({'errors': invalid_parameters})
-        for key, value in config.items():
+        modified = False
+        config = self.controller.config
+        for key, value in config_json.items():
             if key.startswith('ac_sleep_'):
-                if self.controller.sleep_mode_settings[key[9:]] != value:
+                if config['sleep_mode_settings'][key[9:]] != value:
                     LOGGER.info('Setting sleep_mode_settings.%s to %s', key[9:], value)
-                    self.controller.sleep_mode_settings[key[9:]] = value
-            elif self.controller.__getattribute__(key) != value:
+                    config['sleep_mode_settings'][key[9:]] = value
+                    modified = True
+            elif config[key] != value:
                 LOGGER.info('Setting %s to %s', key, value)
-                self.controller.__setattr__(key, value)
-        return web.json_response(config)
+                config[key] = value
+                modified = True
+        if modified and self.config_file:
+            yaml = YAML()
+            with open(self.config_file, 'w') as stream:
+                yaml.dump(config, stream)
+            LOGGER.info('Configuration saved to %s', self.config_file)
+        return web.json_response(config_json)
 
     def parse_controls_query(self, query_dict):
         """
@@ -91,45 +104,45 @@ class BrickBatteryHTTPServer:
         of invalid parameters containing their reasons where errors were found
         """
         invalid_parameters = {}
-        ctrl = self.controller
-        config = {'operation': ctrl.operation,
-                  'min_load': ctrl.min_load,
-                  'max_load': ctrl.max_load,
-                  'wakeup_threshold': ctrl.wakeup_threshold,
-                  'sleep_threshold': ctrl.sleep_threshold,
-                  'read_interval': ctrl.read_interval,
-                  'set_interval': ctrl.set_interval,
-                  'ac_sleep_pow': ctrl.sleep_mode_settings['pow'],
-                  'ac_sleep_mode': ctrl.sleep_mode_settings['mode'],
-                  'ac_sleep_stemp': ctrl.sleep_mode_settings['stemp'],
-                  'ac_sleep_shum': ctrl.sleep_mode_settings['shum']}
+        config = self.controller.config
+        json_config = {'operation': config['operation'],
+                       'min_load': config['min_load'],
+                       'max_load': config['max_load'],
+                       'wakeup_threshold': config['wakeup_threshold'],
+                       'sleep_threshold': config['sleep_threshold'],
+                       'read_interval': config['read_interval'],
+                       'set_interval': config['set_interval'],
+                       'ac_sleep_pow': config['sleep_mode_settings']['pow'],
+                       'ac_sleep_mode': config['sleep_mode_settings']['mode'],
+                       'ac_sleep_stemp': config['sleep_mode_settings']['stemp'],
+                       'ac_sleep_shum': config['sleep_mode_settings']['shum']}
         for key, value in query_dict:
-            if key not in config.keys():
+            if key not in json_config.keys():
                 invalid_parameters[key] = 'invalid key'
             elif key == 'operation':
-                parse_onoff(key, value, config, invalid_parameters)
+                parse_onoff(key, value, json_config, invalid_parameters)
             elif key in ['wakeup_threshold', 'read_interval', 'set_interval']:
-                parse_strictly_positive_int(key, value, config, invalid_parameters)
+                parse_strictly_positive_int(key, value, json_config, invalid_parameters)
             elif key == 'sleep_threshold':
-                parse_positive_int(key, value, config, invalid_parameters)
+                parse_positive_int(key, value, json_config, invalid_parameters)
             elif key in ['min_load', 'max_load']:
-                parse_int(key, value, config, invalid_parameters)
+                parse_int(key, value, json_config, invalid_parameters)
             elif key == 'ac_sleep_pow':
-                parse_ac_pow(key, value, config, invalid_parameters)
+                parse_ac_pow(key, value, json_config, invalid_parameters)
             elif key == 'ac_sleep_mode':
-                parse_ac_mode(key, value, config, invalid_parameters)
+                parse_ac_mode(key, value, json_config, invalid_parameters)
             elif key == 'ac_sleep_stemp':
-                parse_ac_stemp(key, value, config, invalid_parameters)
+                parse_ac_stemp(key, value, json_config, invalid_parameters)
             elif key == 'ac_sleep_shum':
-                parse_ac_shum(key, value, config, invalid_parameters)
-        if not config['min_load'] < config['max_load']:
+                parse_ac_shum(key, value, json_config, invalid_parameters)
+        if not json_config['min_load'] < json_config['max_load']:
             invalid_parameters['min_load'] = 'min_load must be lower than max_load'
-        if not config['sleep_threshold'] < config['wakeup_threshold']:
+        if not json_config['sleep_threshold'] < json_config['wakeup_threshold']:
             invalid_parameters['wakeup_threshold'] = \
                 'wakeup_threshold must be greater than sleep_threshold'
-        if not config['set_interval'] >= 10:
+        if not json_config['set_interval'] >= 10:
             invalid_parameters['set_interval'] = 'must be at least 10 seconds'
-        return config, invalid_parameters
+        return json_config, invalid_parameters
 
     async def hello(self, _):
         """Dumb hello welcome handler for server root"""

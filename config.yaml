@@ -1,0 +1,85 @@
+# config.yaml for Brick Battery Controller
+# Changes to the configuration using the web API will be saved to this file.
+# When the controller is running, do not modify this file, use the web API
+
+# Time in seconds between aircon and inverter status refreshes
+# over 4/5s SolarEdge web API will drop the HTTP connection
+read_interval: 3
+
+# Time in seconds before attempting to change aircons controls
+set_interval: 30
+
+# For example we want the household to always import from the grid a value
+# within [0, 300] watts. A larger range gives more
+# tolerance and avoids changing settings continuously if
+# household comsumption or PV generation fluctuate often.
+
+# Minimum allowed power in watts allowed to be coming from the grid
+# can be negative to allow export
+min_load: 0
+# Maximum allowed power in watts allowed to be coming from the grid
+# can be negative to allow export
+max_load: 400
+
+# Photo-voltaic production in watts under which the controller goes to sleep, 
+# i.e. sets aircons to their sleep_mode_settings
+sleep_threshold: 200
+# Photo-voltaic production in watts over which the controller wakes up and take
+# control over aircons dynamically
+wakeup_threshold: 500
+
+# Whether the system will effectively send set commands to the aircons
+# if operation is false, it is essentially in dry-run mode, useful for testing
+operation: true
+
+# Settings for airons once the controller goes to sleep
+# key meaning and value is aircon API dependent
+sleep_mode_settings:
+  # Power, 1 is on
+  pow: 1
+  # 4 is heat
+  mode: 4
+  # Set air temperature in ºC
+  stemp: 22
+  # Set relative air humidity in %
+  shum: 0
+
+# List of aircons to control
+aircons:
+- number: 0
+  url: http://192.168.1.101
+- number: 1
+  url: http://192.168.1.102
+
+# File containing the curl command to access the current power flow
+# API entry point from SolarEdge
+current_power_flow_file: currentPowerFlow.curl
+
+# Brick Battery Controller API
+listen:
+  # localhost to only accept connections from this host
+  # 0.0.0.0 for any interface/ip
+  interface: 0.0.0.0
+  port: 8080
+
+# Name of CSV data file to log data to
+csv_file: energy_data.csv
+
+# Headers of columns in the CSV data file
+# note that headers must match actual CSVLogger
+# variables number and order in the code
+csv_headers:
+- datetime
+- PV generation in W
+- Grid import in W
+- Estimated A/C consumption in W
+- Living Room compressor frequency in Hz
+- Bedrooms compressor frequency in Hz
+- Outdoor temperature in ºC
+- Living Room temperature in ºC
+- Bedrooms temperature in ºC
+- Target Living Room temperature in ºC
+- Target Bedrooms temperature in ºC
+- Target Living Room humidity in %RH
+- Target Bedrooms humidity in %RH
+

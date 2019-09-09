@@ -14,6 +14,7 @@ import datetime
 import logging
 import math
 import os
+from ruamel.yaml import YAML
 import sys
 import traceback
 
@@ -36,54 +37,20 @@ def main():
     #logging.getLogger('daikin_api').setLevel(logging.DEBUG)
     #logging.getLogger('solaredge_api').setLevel(logging.DEBUG)
 
+    config_file = 'config.yaml'
+    yaml = YAML()
+    with open(config_file, 'r') as stream:
+        config = yaml.load(stream)
 
-    aircons = [Aircon(0, 'http://192.168.1.101'),
-               Aircon(1, 'http://192.168.1.102')]
+    aircons = [Aircon(ac['number'], ac['url']) for ac in config['aircons']]
 
-    current_power_flow_file = os.path.join(
-        os.path.dirname(os.path.realpath(sys.argv[0])),
-        'currentPowerFlow.curl')
-    solar = SolarInfo(current_power_flow_file)
-
-    sleep_mode_settings = {
-        'pow': '1',
-        'mode': '4',
-        'stemp': '22',
-        'shum': '0'
-    }
-
-    data_to_save = ['datetime',
-                    'PV generation in W',
-                    'Grid import in W',
-                    'Estimated A/C consumption in W',
-                    'Living Room compressor frequency in Hz',
-                    'Bedrooms compressor frequency in Hz',
-                    'Outdoor temperature in ºC',
-                    'Living Room temperature in ºC',
-                    'Bedrooms temperature in ºC',
-                    'Target Living Room temperature in ºC',
-                    'Target Bedrooms temperature in ºC',
-                    'Target Living Room humidity in %RH',
-                    'Target Bedrooms humidity in %RH',
-                    ]
-    csv = CSVLogger('energy_data.csv', data_to_save)
-
-    # Use 'localhost' to only accept connections from this host
-    server = BrickBatteryHTTPServer('0.0.0.0', 8080)
-
-    # don't read less often than 5s otherwise SolarEdge drops connection
-    bbc = BrickBatteryCharger(aircons,
-                              solar,
-                              read_interval=3,
-                              set_interval=60,
-                              min_load=0,
-                              max_load=400,
-                              server=server,
-                              csv=csv,
-                              sleep_mode_settings=sleep_mode_settings,
-                              sleep_threshold=200,
-                              wakeup_threshold=500,
-                              operation=True)
+    bbc = BrickBatteryCharger(config,
+                              aircons,
+                              SolarInfo(config['current_power_flow_file']),
+                              server=BrickBatteryHTTPServer(config['listen']['interface'],
+                                                            config['listen']['port'],
+                                                            config_file),
+                              csv=CSVLogger(config['csv_file'], config['csv_headers']))
     bbc.charge()
 
 class BrickBatteryCharger:
@@ -105,41 +72,19 @@ class BrickBatteryCharger:
     logic could be greatly enhanced to adjust power output by using fan speed
     more than the temperature setting itself.
     """
-    def __init__(self, aircons, solar, set_interval, read_interval,
-                 min_load, max_load, server, csv=None, sleep_mode_settings={},
-                 sleep_threshold=0, wakeup_threshold=200, operation=True):
+    def __init__(self, config, aircons, solar, server, csv=None):
         """
         Args:
+            config a DotMap object containing settings from the yaml config file
             aircons a list of Aircon instances
             solar a SolarInfo instance
-            set_interval the time in seconds between sending
-                         new commands to the aircons
-            read_interval the (minimum) time in seconds between aircon
-                          and solar sensors polls
-            min_load target minimum load in watts
-            max_load target maximum load in watts. For example we want
-                     the household to always import from the grid a value
-                     within [0, 300] watts. A larger range gives more
-                     tolerance and avoids changing settings continuously if
-                     household comsumption or PV generation fluctuate often.
             server a BrickBatteryHTTPServer instance to expose controls and
                    status through a web API
             csv an optional CSVLogger instance to write analytics information to,
                 defaults to None if no logging is required
-            sleep_mode_settings a set of Aircon settings to send to each aircon
-                                unit when PV generation is stopped in the evening
-            sleep_threshold the PV generation in watts from the inverter at which
-                            the brick loader stops controlling the aircons and
-                            sleep_mode_settings are set
-                            Must be lower than wakeup_threshold
-            wakeup_threshold the PV generation in watts from the inverter at which
-                             sleep_mode_settings are ignored and the brick loader
-                             starts controlling the aircons
-                             Must be greater than sleep_threshold
-            operation set to False to test your system after changes without
-                    interfering with the household operation.
         """
         now = datetime.datetime.now()
+        self.config = config
         self.ac = aircons
         self.ac_consumption = float('NaN')
         self.solar = solar
@@ -147,18 +92,10 @@ class BrickBatteryCharger:
         self.server = server
         self.server.register_controller(self)
         self.last_updated = None
-        self.set_interval = set_interval
-        self.read_interval = read_interval
         self.last_set = None
         self.csv_save_interval = 120
         self.csv_last_save = now
-        self.operation = operation
-        self.min_load = min_load
-        self.max_load = max_load
         self.is_sleep_mode = False
-        self.sleep_mode_settings = sleep_mode_settings
-        self.wakeup_threshold = wakeup_threshold
-        self.sleep_threshold = sleep_threshold
 
     def charge(self):
         """
@@ -166,7 +103,7 @@ class BrickBatteryCharger:
         then run the main loop (using the event loop...)
         """
         loop = asyncio.get_event_loop()
-        if not self.operation:
+        if not self.config['operation']:
             LOGGER.warning('Operation mode off: not sending any commands to aircons')
         if self.csv:
             LOGGER.info('Logging runtime analytics to %s', self.csv.file.name)
@@ -176,13 +113,13 @@ class BrickBatteryCharger:
             *self.get_load_ac_status_requests()))
         now = datetime.datetime.now()
         self.last_updated = now
-        if pv_generation <= self.sleep_threshold:
+        if pv_generation <= self.config['sleep_threshold']:
             LOGGER.info('Inverter off, started in sleep mode')
             self.is_sleep_mode = True
         else:
             # Schedule first set in 3 read steps
             self.last_set = now - datetime.timedelta(
-                seconds=self.set_interval - 3 * self.read_interval)
+                seconds=self.config['set_interval'] - 3 * self.config['read_interval'])
         for unit in self.ac:
             LOGGER.info(unit)
         loop.run_until_complete(self.server.start())
@@ -199,7 +136,7 @@ class BrickBatteryCharger:
             try:
                 await asyncio.gather(
                     self.read_set_step(),
-                    asyncio.sleep(self.read_interval * (10 if self.is_sleep_mode else 1)))
+                    asyncio.sleep(self.config['read_interval'] * (10 if self.is_sleep_mode else 1)))
             except Exception as ex:
                 LOGGER.error('Something went wrong, skip this run loop call, cause: %s', ex)
                 LOGGER.error(traceback.format_exc())
@@ -254,7 +191,7 @@ class BrickBatteryCharger:
                          else self.decrease_temp_for_target(target)
         if not setting_change:
             return
-        if not self.operation:
+        if not self.config['operation']:
             LOGGER.warning('Operation mode off: no set action sent')
             return
         asyncio.gather(*[unit.set_control_info() for unit in self.ac])
@@ -377,16 +314,16 @@ class BrickBatteryCharger:
         """
         if math.isnan(load) or math.isnan(consumption):
             return float('NaN')
-        if self.min_load < load < self.max_load:
+        if self.config['min_load'] < load < self.config['max_load']:
             # Don't bother touching a thing if importing within
             # acceptable load range
             return 0
-        avg_load_target = (self.max_load + self.min_load) / 2
-        if load > self.max_load and consumption > 0:
+        avg_load_target = (self.config['max_load'] + self.config['min_load']) / 2
+        if load > self.config['max_load'] and consumption > 0:
             # We need to reduce AC consumption
             return -min(load - avg_load_target, consumption)
         max_total_ac_consumption = sum([unit.max_consumption for unit in self.ac])
-        if load < self.min_load and consumption < max_total_ac_consumption:
+        if load < self.config['min_load'] and consumption < max_total_ac_consumption:
             # We need to increase AC consumption
             return min(avg_load_target - load, max_total_ac_consumption)
         # We cannot help because either the AC is off and we're over consuming
@@ -416,16 +353,16 @@ class BrickBatteryCharger:
         else:
             LOGGER.info('PV generating %.0fW Importing %.0fW', pv_generation, grid_import)
 
-        if pv_generation <= self.sleep_threshold and not self.is_sleep_mode:
+        if pv_generation <= self.config['sleep_threshold'] and not self.is_sleep_mode:
             LOGGER.info('PV generation just stopped, entering sleep mode')
             self.is_sleep_mode = True
-            if not self.operation:
+            if not self.config['operation']:
                 LOGGER.warning('Operation mode off: no set action sent')
             else:
                 for unit in self.ac:
-                    unit.controls = self.sleep_mode_settings
+                    unit.controls = self.config['sleep_mode_settings']
                 asyncio.gather(*[unit.set_control_info() for unit in self.ac])
-        elif pv_generation >= self.wakeup_threshold and self.is_sleep_mode:
+        elif pv_generation >= self.config['wakeup_threshold'] and self.is_sleep_mode:
             LOGGER.info('PV generation just starting, leaving sleep mode')
             self.is_sleep_mode = False
 
@@ -456,12 +393,12 @@ class BrickBatteryCharger:
             target = self.calculate_target(grid_import, self.ac_consumption)
             if self.last_set:
                 next_set = (self.last_set
-                            + datetime.timedelta(0, self.set_interval)
+                            + datetime.timedelta(0, self.config['set_interval'])
                             - now).total_seconds()
             else:
                 next_set = 0
             LOGGER.info('Target is %.0f (import in [%d, %d]) ',
-                        target, self.min_load, self.max_load)
+                        target, self.config['min_load'], self.config['max_load'])
             if next_set > 0:
                 LOGGER.info('next set in %.0f seconds \n', next_set)
             elif target != 0 and not math.isnan(target):
