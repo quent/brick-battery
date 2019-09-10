@@ -13,10 +13,8 @@ import asyncio
 import datetime
 import logging
 import math
-import os
-from ruamel.yaml import YAML
-import sys
 import traceback
+from ruamel.yaml import YAML
 
 from battery_api import BrickBatteryHTTPServer
 from daikin_api import Aircon
@@ -44,13 +42,17 @@ def main():
 
     aircons = [Aircon(ac['number'], ac['url']) for ac in config['aircons']]
 
+    csv_logger = None
+    if config['csv_file']:
+        csv_logger = CSVLogger(config['csv_file'], config['csv_headers'])
+
     bbc = BrickBatteryCharger(config,
                               aircons,
                               SolarInfo(config['current_power_flow_file']),
                               server=BrickBatteryHTTPServer(config['listen']['interface'],
                                                             config['listen']['port'],
                                                             config_file),
-                              csv=CSVLogger(config['csv_file'], config['csv_headers']))
+                              csv=csv_logger)
     bbc.charge()
 
 class BrickBatteryCharger:
@@ -75,7 +77,7 @@ class BrickBatteryCharger:
     def __init__(self, config, aircons, solar, server, csv=None):
         """
         Args:
-            config a DotMap object containing settings from the yaml config file
+            config a dictionary containing settings from the yaml config file
             aircons a list of Aircon instances
             solar a SolarInfo instance
             server a BrickBatteryHTTPServer instance to expose controls and
@@ -93,7 +95,6 @@ class BrickBatteryCharger:
         self.server.register_controller(self)
         self.last_updated = None
         self.last_set = None
-        self.csv_save_interval = 120
         self.csv_last_save = now
         self.is_sleep_mode = False
 
@@ -368,26 +369,8 @@ class BrickBatteryCharger:
 
         self.estimate_ac_consumption()
         LOGGER.info('Estimated combined A/C consumption %.0fW', self.ac_consumption)
-        # Make sure values match the order of CSVLogger.data_to_save
-        if self.csv:
-            self.csv.write([start_step_time_string,
-                            pv_generation,
-                            grid_import,
-                            self.ac_consumption,
-                            self.ac[0].sensors.get('cmpfreq', ''),
-                            self.ac[1].sensors.get('cmpfreq', ''),
-                            self.ac[0].sensors.get('otemp', ''),
-                            self.ac[0].sensors.get('htemp', ''),
-                            self.ac[1].sensors.get('htemp', ''),
-                            self.ac[0].controls.get('stemp', ''),
-                            self.ac[1].controls.get('stemp', ''),
-                            self.ac[0].controls.get('shum', ''),
-                            self.ac[1].controls.get('shum', ''),
-                            ])
-            if (now - self.csv_last_save
-                    >= datetime.timedelta(0, self.csv_save_interval)):
-                self.csv_last_save = now
-                self.csv.save()
+
+        self.save_csv_line(now, pv_generation, grid_import)
 
         if not self.is_sleep_mode:
             target = self.calculate_target(grid_import, self.ac_consumption)
@@ -405,10 +388,39 @@ class BrickBatteryCharger:
                 LOGGER.info('setting now\n')
             else:
                 LOGGER.info('setting anytime\n')
+
             if next_set <= 0 and target != 0 and not math.isnan(target):
                 self.last_set = now
                 LOGGER.info("Setting A/C controls\n")
                 await self.set_ac_controls(target)
+
+    def save_csv_line(self, record_time, pv_generation, grid_import):
+        """
+        Save, if configured, a new line data for the given record time
+        information about pv_generation, grid_import and aircons statuses.
+        It will only commit to disk every csv_save_interval from the config.
+        """
+        if not self.csv:
+            return
+        # Make sure values match the order of csv_headers in config
+        self.csv.write([record_time.strftime("%d/%m/%Y %H:%M:%S"),
+                        pv_generation,
+                        grid_import,
+                        self.ac_consumption,
+                        self.ac[0].sensors.get('cmpfreq', ''),
+                        self.ac[1].sensors.get('cmpfreq', ''),
+                        self.ac[0].sensors.get('otemp', ''),
+                        self.ac[0].sensors.get('htemp', ''),
+                        self.ac[1].sensors.get('htemp', ''),
+                        self.ac[0].controls.get('stemp', ''),
+                        self.ac[1].controls.get('stemp', ''),
+                        self.ac[0].controls.get('shum', ''),
+                        self.ac[1].controls.get('shum', ''),
+                        ])
+        if (record_time - self.csv_last_save
+                >= datetime.timedelta(0, self.config['csv_save_interval'])):
+            self.csv_last_save = record_time
+            self.csv.save()
 
 if __name__ == '__main__':
     main()

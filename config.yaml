@@ -58,12 +58,16 @@ current_power_flow_file: currentPowerFlow.curl
 # Brick Battery Controller API
 listen:
   # localhost to only accept connections from this host
-  # 0.0.0.0 for any interface/ip
+  # 0.0.0.0 for any interface/ip range
   interface: 0.0.0.0
   port: 8080
 
-# Name of CSV data file to log data to
+# Name of CSV data file to log data to. Leave empty if no CSV logging required
 csv_file: energy_data.csv
+
+# Minimum interval in seconds between CSV file disk saves.
+# This is used to minimise wear on SD card, leave to 0 if not relevant
+csv_save_interval: 120
 
 # Headers of columns in the CSV data file
 # note that headers must match actual CSVLogger
