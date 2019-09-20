@@ -52,7 +52,7 @@ class BrickBatteryHTTPServer:
 
     async def start(self):
         """
-        Start the socket listener on the localhost, make sur the controller has
+        Start the socket listener on the localhost, make sure the controller has
         been registered first
         """
         await self.runner.setup()

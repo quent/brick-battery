@@ -54,6 +54,7 @@ aircons:
 # File containing the curl command to access the current power flow
 # API entry point from SolarEdge
 current_power_flow_file: currentPowerFlow.curl
+inverter_host: 192.168.2.10
 
 # Brick Battery Controller API
 listen:

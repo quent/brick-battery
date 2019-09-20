@@ -18,7 +18,7 @@ from ruamel.yaml import YAML
 
 from battery_api import BrickBatteryHTTPServer
 from daikin_api import Aircon
-from solaredge_api import SolarInfo
+from solaredge_modbus_tcp import SolarInfo
 from csv_logger import CSVLogger
 
 LOGGER = logging.getLogger('brick_battery')
@@ -34,6 +34,7 @@ def main():
     logging.basicConfig(level=logging.INFO)
     #logging.getLogger('daikin_api').setLevel(logging.DEBUG)
     #logging.getLogger('solaredge_api').setLevel(logging.DEBUG)
+    logging.getLogger('solaredge_modbus_tcp').setLevel(logging.DEBUG)
 
     config_file = 'config.yaml'
     yaml = YAML()
@@ -48,7 +49,7 @@ def main():
 
     bbc = BrickBatteryCharger(config,
                               aircons,
-                              SolarInfo(config['current_power_flow_file']),
+                              SolarInfo(config['inverter_host']),
                               server=BrickBatteryHTTPServer(config['listen']['interface'],
                                                             config['listen']['port'],
                                                             config_file),
