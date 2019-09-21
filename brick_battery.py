@@ -41,6 +41,10 @@ def main():
     with open(config_file, 'r') as stream:
         config = yaml.load(stream)
 
+    # Ensure A/C sleep mode settings are strings
+    for key, value in config['sleep_mode_settings'].items():
+        config['sleep_mode_settings'][key] = str(value)
+
     aircons = [Aircon(ac['number'], ac['url']) for ac in config['aircons']]
 
     csv_logger = None
@@ -291,7 +295,7 @@ class BrickBatteryCharger:
             stemp[max_index] -= step
             target += step * active_units[max_index].consumption_per_degree
             setting_change = True
-            LOGGER.info('Increasing temperature in %s to %d',
+            LOGGER.info('Decreasing temperature in %s to %d',
                         active_units[max_index].name, stemp[max_index])
 
         for index, unit in enumerate(active_units):

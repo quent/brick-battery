@@ -33,16 +33,16 @@ wakeup_threshold: 500
 operation: true
 
 # Settings for airons once the controller goes to sleep
-# key meaning and value is aircon API dependent
+# key meaning and value is aircon API dependent, use strings
 sleep_mode_settings:
   # Power, 1 is on
-  pow: 1
+  pow: '1'
   # 4 is heat
-  mode: 4
+  mode: '4'
   # Set air temperature in ºC
-  stemp: 22
+  stemp: '22'
   # Set relative air humidity in %
-  shum: 0
+  shum: '0'
 
 # List of aircons to control
 aircons:
