@@ -112,6 +112,9 @@ class BrickBatteryHTTPServer:
                        'sleep_threshold': config['sleep_threshold'],
                        'read_interval': config['read_interval'],
                        'set_interval': config['set_interval'],
+                       'control_humidity': config['control_humidity'],
+                       'max_shum': config['max_shum'],
+                       'max_htemp': config['max_htemp'],
                        'ac_sleep_pow': config['sleep_mode_settings']['pow'],
                        'ac_sleep_mode': config['sleep_mode_settings']['mode'],
                        'ac_sleep_stemp': config['sleep_mode_settings']['stemp'],
@@ -119,7 +122,7 @@ class BrickBatteryHTTPServer:
         for key, value in query_dict:
             if key not in json_config.keys():
                 invalid_parameters[key] = 'invalid key'
-            elif key == 'operation':
+            elif key in ['operation', 'control_humidity']:
                 parse_onoff(key, value, json_config, invalid_parameters)
             elif key in ['wakeup_threshold', 'read_interval', 'set_interval']:
                 parse_strictly_positive_int(key, value, json_config, invalid_parameters)
@@ -131,9 +134,9 @@ class BrickBatteryHTTPServer:
                 parse_ac_pow(key, value, json_config, invalid_parameters)
             elif key == 'ac_sleep_mode':
                 parse_ac_mode(key, value, json_config, invalid_parameters)
-            elif key == 'ac_sleep_stemp':
+            elif key in ['max_htemp', 'ac_sleep_stemp']:
                 parse_ac_stemp(key, value, json_config, invalid_parameters)
-            elif key == 'ac_sleep_shum':
+            elif key in ['max_shum', 'ac_sleep_shum']:
                 parse_ac_shum(key, value, json_config, invalid_parameters)
         if not json_config['min_load'] < json_config['max_load']:
             invalid_parameters['min_load'] = 'min_load must be lower than max_load'

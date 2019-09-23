@@ -32,7 +32,7 @@ wakeup_threshold: 500
 # if operation is false, it is essentially in dry-run mode, useful for testing
 operation: true
 
-# Settings for airons once the controller goes to sleep
+# Settings for aircons once the controller goes to sleep
 # key meaning and value is aircon API dependent, use strings
 sleep_mode_settings:
   # Power, 1 is on
@@ -50,6 +50,16 @@ aircons:
   url: http://192.168.1.101
 - number: 1
   url: http://192.168.1.102
+
+# Whether we want the controller to manage humdity settings
+control_humidity: true
+# The set humidity value to use if we need to increase consumption and control_humidity is on
+max_shum: '50'
+
+# Control what target house temperature we want. Note this is the temperature at ceiling
+# height at the A/C and that the walls need to high temperature gradient to suck in heat.
+# Set the value down from 30 if it gets uncomfortably hot. This is not the A/C stemp value.
+max_htemp: '30'
 
 # File containing the curl command to access the current power flow
 # API entry point from SolarEdge

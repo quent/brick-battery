@@ -223,14 +223,24 @@ class BrickBatteryCharger:
                         'stemp' in unit.controls and 'shum' in unit.controls and
                         'htemp' in unit.sensors and unit.controls.get('pow', '-') == '1']
         stemp = [float(unit.controls['stemp']) for unit in active_units]
+        htemp = [float(unit.sensors['htemp']) for unit in active_units]
         shum = [int(unit.controls['shum']) for unit in active_units]
+        max_htemp = int(self.config['max_htemp'])
         while target > 0:
-            min_temp, min_index = min((temp, index) for (index, temp) in enumerate(stemp))
+            # Find the A/C that needs the most boost to get to max house temperature
+            _, min_index = min((st + ht, index)
+                               for (index, [ht, st]) in enumerate(zip(htemp, stemp)))
             # Note: stemp, while being a float, only gets int and half-int values through
             # additions and substractions: equals-comparison and modulus are safe
-            if min_temp >= 30:
-                LOGGER.info('All aircons set to max already')
-                break
+            if stemp[min_index] >= 30:
+                # Still check if another A/C is not set to max yet
+                min_st, min_st_index = min((st, index)
+                                           for (index, st) in enumerate(stemp))
+                if min_st >= 30:
+                    LOGGER.info('All aircons set to max already')
+                    break
+                else:
+                    min_index = min_st_index
             # If temperature set to a half degree, first try to set it back to integer
             step = 1 if stemp[min_index] % 1 == 0 else 0.5
             stemp[min_index] += step
@@ -240,14 +250,26 @@ class BrickBatteryCharger:
                         active_units[min_index].name, stemp[min_index])
 
         for index, unit in enumerate(active_units):
+            if htemp[index] > max_htemp:
+                # Now set stemp down from max_temp by every degree htemp is above max_htemp
+                # For instance, If max_htemp is 27 and htemp 29, set stemp to 25
+                new_stemp = 2 * max_htemp - htemp[index]
+                target += abs(stemp[index] - new_stemp) * unit.consumption_per_degree
+                stemp[index] = new_stemp
+                setting_change = True
+                LOGGER.info('Getting a bit warm in %s: %d, reviewing set temperature to %d',
+                            unit.name, htemp[index], stemp[index])
+
+        max_shum = int(self.config['max_shum'])
+        for index, unit in enumerate(active_units):
             if target <= 0:
                 break
             # Increasing temperature not sufficient, time to turn on humidifier
-            if shum[index] == 0:
-                shum[index] = 50
+            if shum[index] != max_shum and self.config['control_humidity']:
+                shum[index] = max_shum
                 setting_change = True
                 target -= unit.humidifier_consumption
-                LOGGER.info('Turning humidification on in %s', unit.name)
+                LOGGER.info('Setting humidification to %d%%RH in %s', max_shum, unit.name)
 
         if setting_change:
             for index, unit in enumerate(active_units):
@@ -302,7 +324,7 @@ class BrickBatteryCharger:
             # Temperature low enough, time to turn off humidifier
             # It might take some time for this action to affect consumption
             # so don't count it against the target
-            if stemp[index] <= 26 and shum[index] != 0:
+            if stemp[index] <= 26 and shum[index] != 0 and self.config['control_humidity']:
                 shum[index] = 0
                 setting_change = True
                 LOGGER.info('Turning humidification off in %s', unit.name)
