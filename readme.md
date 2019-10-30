@@ -5,6 +5,38 @@
 A small piece of Python software to run heating harder at home when the sun
 shines.
 
+## Some software specs
+
+- Python3.5
+- Implements a client for the SolarEdge API (to get power of inverter and grid
+net meter)
+- Implements a ModBus TCP SunSpec client as an alternative more reliable way to
+poll the inverter from the LAN
+- Implements a client for the Daikin API
+- Runs a poll loop every 3 seconds to check grid import/export
+and aircon consumptions
+- Adjusts every minute if needed the aircon control settings to
+land the grid import/export value within the pre-defined target
+window. This gives enough time for the aircon compressors
+to adjust their running regime.
+- Logs sensors and controls to know what is going on during the system operation
+- Has a sleep mode setting for the aircons to operate in when PV generation has
+stopped for the day
+- Polls APIs asynchronously (concurrently)
+
+## The physical setup:
+- Canberra climate: cold winters but sunny and relatively warm days with cool
+nights
+- About 5kW of PV generation in a split array using a SolarEdge HD Wave inverter
+connected to a WattMeter for the grid net consumption monitoring. This roughly
+provides a 3kW peak of alternative current generation in the middle of a sunny
+winter day.
+- 2x Daikin Ururu Sarara 3.5kW (FTXZ-N 35) split air conditioners each connected
+to a Daikin wifi module. These fancy aircons run a humidifier but Daikin
+"forgot" to advertise the fan speed settings through the LAN API controller
+- A Raspberry Pi 3 running Debian
+- 3-phase grid supply, 1-phase inverter
+
 ## Background
 
 This program helps with a problem I faced setting up home automation.
@@ -37,29 +69,8 @@ Obviously, my main consideration here is more, as stated earlier, to minimise
 my energy bill by increasing my self-consumption (and have a bit of fun
 designing the system).
 
-## Some software specs
-
-- Coded in Python3.5
-- Implements a client for the SolarEdge API (to get power of inverter and grid
-net meter)
-- Implements a client for the Daikin API
-- Runs a poll loop every 3 seconds to check grid import/export
-and aircon consumptions
-- Adjusts every minute if needed the aircon control settings to
-land the grid import/export value within the pre-defined target
-window. This gives enough time for the aircon compressors
-to adjust their running regime.
-- Logs sensors and controls to know what is going on during the system operation
-- Has a sleep mode setting for the aircons to operate in when PV generation has
-stopped for the day
-- Polls APIs asynchronously (concurrently)
-
-## The physical setup:
-- Canberra climate: cold winters but sunny and relatively warm days with cool
-nights
-- About 5kW of PV generation in a split array using a SolarEdge HD Wave inverter
-connected to a WattMeter for the grid net consumption monitoring. This roughly
-provides a 3kW peak of alternative current generation at midday.
-- 2x Daikin Ururu Sarara 3.5kW (FTXZ-N 35) split air conditioners each connected
-to a Daikin wifi module
-- A Raspberry Pi 3 running Debian
+The system was initially polling the SolarEdge cloud API but after I found it
+not always reliable and sometimes too laggy (>2/3min between refreshes), I
+found that I could fairly simply use the ModBus over TCP capability from the
+inverter and get all data from the LAN. This uses the SunSpec standard so it
+should be easy to use with any non-SolarEdge inverter.
