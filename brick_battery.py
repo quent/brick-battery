@@ -142,7 +142,7 @@ class BrickBatteryCharger:
             try:
                 await asyncio.gather(
                     self.read_set_step(),
-                    asyncio.sleep(self.config['read_interval'] * (10 if self.is_sleep_mode else 1)))
+                    asyncio.sleep(self.config['read_interval']))
             except Exception as ex:
                 LOGGER.error('Something went wrong, skip this run loop call, cause: %s', ex)
                 LOGGER.error(traceback.format_exc())
