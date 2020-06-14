@@ -20,6 +20,7 @@ from battery_api import BrickBatteryHTTPServer
 from daikin_api import Aircon
 from solaredge_modbus_tcp import SolarInfo
 from csv_logger import CSVLogger
+import utils
 
 LOGGER = logging.getLogger('brick_battery')
 
@@ -90,7 +91,6 @@ class BrickBatteryCharger:
             csv an optional CSVLogger instance to write analytics information to,
                 defaults to None if no logging is required
         """
-        now = datetime.datetime.now()
         self.config = config
         self.ac = aircons
         self.ac_consumption = float('NaN')
@@ -100,7 +100,7 @@ class BrickBatteryCharger:
         self.server.register_controller(self)
         self.last_updated = None
         self.last_set = None
-        self.csv_last_save = now
+        self.csv_last_save = utils.datetime_now()
         self.is_sleep_mode = False
 
     def charge(self):
@@ -117,7 +117,7 @@ class BrickBatteryCharger:
             self.solar.check_se_load(),
             *[unit.get_basic_info() for unit in self.ac],
             *self.get_load_ac_status_requests()))
-        now = datetime.datetime.now()
+        now = utils.datetime_now()
         self.last_updated = now
         if pv_generation <= self.config['sleep_threshold']:
             LOGGER.info('Inverter off, started in sleep mode')
@@ -369,12 +369,12 @@ class BrickBatteryCharger:
         - If not asleep, calculate target aircon consumption and
           set aircons controls for this target (only at set interval)
         """
-        start_step_time_string = datetime.datetime.now().strftime("%d/%m/%Y %H:%M:%S")
+        start_step_time_string = utils.datetime_now().strftime("%d/%m/%Y %H:%M:%S")
         LOGGER.info(start_step_time_string)
         [(grid_import, pv_generation), *_] = await asyncio.gather(
             self.solar.check_se_load(),
             *self.get_load_ac_status_requests())
-        now = datetime.datetime.now()
+        now = utils.datetime_now()
         self.last_updated = now
         if grid_import < 0:
             LOGGER.info('PV generating %.0fW Exporting %.0fW', pv_generation, -grid_import)
@@ -430,7 +430,7 @@ class BrickBatteryCharger:
         if not self.csv:
             return
         # Make sure values match the order of csv_headers in config
-        self.csv.write([record_time.strftime("%d/%m/%Y %H:%M:%S"),
+        self.csv.write([record_time.replace(microsecond=0).isoformat(),
                         pv_generation,
                         grid_import,
                         self.ac_consumption,

@@ -2,11 +2,11 @@
 Module for the SolarEdge Web API to get realtime PV generation, load and grid import
 pushed by the inverter and energy monitor.
 """
-from datetime import datetime
 import logging
 import uncurl
-
 import aiohttp
+
+import utils
 
 LOGGER = logging.getLogger(__name__)
 
@@ -110,7 +110,7 @@ class SolarInfo:
                 if is_export:
                     grid_import = -grid_import
                 if grid_import != self.grid_import or pv_generation != self.pv_generation:
-                    self.last_changed = datetime.now()
+                    self.last_changed = utils.datetime_now()
                     self.grid_import = grid_import
                     self.pv_generation = pv_generation
                 return grid_import, pv_generation
