@@ -6,6 +6,7 @@ via a web API
 import datetime
 import logging
 import math
+from collections import deque
 from ruamel.yaml import YAML
 from aiohttp import web
 
@@ -35,6 +36,7 @@ class BrickBatteryHTTPServer:
         app = web.Application()
         app.add_routes([web.get('/', self.hello),
                         web.get('/status', self.status),
+                        web.get('/recent-values', self.recent_values),
                         web.get('/controls', self.controls)])
         self.runner = web.AppRunner(app)
         self.controller = None
@@ -70,6 +72,11 @@ class BrickBatteryHTTPServer:
                 'solar': ctrl.solar,
                 'ac_consumption': ctrl.ac_consumption,
                 'aircons': ctrl.ac}
+        return web.json_response(safe_json(json))
+
+    async def recent_values(self, _):
+        """Return all recent timeseries values for plotting"""
+        json = self.controller.recent_values or {}
         return web.json_response(safe_json(json))
 
     async def controls(self, request):
@@ -150,7 +157,7 @@ class BrickBatteryHTTPServer:
     async def hello(self, _):
         """Dumb hello welcome handler for server root"""
         return web.Response(text='Hello, Brick Battery here!\n'
-                            'Use /status and /controls to have fun')
+                            'Use /status, /recent-values and /controls to have fun')
 
 def to_int(string):
     """Return parsed string as tuple is_valid, int_value"""
@@ -233,7 +240,7 @@ def parse_ac_shum(key, value, config, invalid_parameters):
 
 def safe_json(obj):
     """Return a version of obj that is serialisable and valid JSON"""
-    if isinstance(obj, list):
+    if isinstance(obj, (list, deque)):
         return [safe_json(elem) for elem in obj]
     if isinstance(obj, datetime.datetime):
         return obj.replace(microsecond=0).isoformat()

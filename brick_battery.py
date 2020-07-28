@@ -14,6 +14,7 @@ import datetime
 import logging
 import math
 import traceback
+from collections import deque
 from ruamel.yaml import YAML
 
 from battery_api import BrickBatteryHTTPServer
@@ -51,6 +52,10 @@ def main():
     csv_logger = None
     if config['csv_file']:
         csv_logger = CSVLogger(config['csv_file'], config['csv_headers'])
+    recent_values = None
+    if config['recent_values'] and config['recent_values']['max_size']:
+        recent_values = {'headers': None,
+                         'values': deque(maxlen=config['recent_values']['max_size'])}
 
     bbc = BrickBatteryCharger(config,
                               aircons,
@@ -58,7 +63,8 @@ def main():
                               server=BrickBatteryHTTPServer(config['listen']['interface'],
                                                             config['listen']['port'],
                                                             config_file),
-                              csv=csv_logger)
+                              csv=csv_logger,
+                              recent_values=recent_values)
     bbc.charge()
 
 class BrickBatteryCharger:
@@ -80,7 +86,7 @@ class BrickBatteryCharger:
     logic could be greatly enhanced to adjust power output by using fan speed
     more than the temperature setting itself.
     """
-    def __init__(self, config, aircons, solar, server, csv=None):
+    def __init__(self, config, aircons, solar, server, csv=None, recent_values=None):
         """
         Args:
             config a dictionary containing settings from the yaml config file
@@ -90,6 +96,8 @@ class BrickBatteryCharger:
                    status through a web API
             csv an optional CSVLogger instance to write analytics information to,
                 defaults to None if no logging is required
+            recent_values an optional container of time-series accessed
+                through the web API for plotting
         """
         self.config = config
         self.ac = aircons
@@ -102,6 +110,7 @@ class BrickBatteryCharger:
         self.last_set = None
         self.csv_last_save = utils.datetime_now()
         self.is_sleep_mode = False
+        self.recent_values = recent_values
 
     def charge(self):
         """
@@ -398,6 +407,7 @@ class BrickBatteryCharger:
         LOGGER.info('Estimated combined A/C consumption %.0fW', self.ac_consumption)
 
         self.save_csv_line(now, pv_generation, grid_import)
+        self.add_to_recent_values(now, pv_generation, grid_import, self.ac_consumption)
 
         if not self.is_sleep_mode:
             target = self.calculate_target(grid_import, self.ac_consumption)
@@ -420,6 +430,17 @@ class BrickBatteryCharger:
                 self.last_set = now
                 LOGGER.info("Setting A/C controls\n")
                 await self.set_ac_controls(target)
+
+    def add_to_recent_values(self, record_time, pv_generation, grid_import, ac_consumption):
+        """
+        Add, if configured, a new timeseries entry for the given record time
+        with pv_generation, grid_import and aircons consumption.
+        """
+        if self.recent_values is None:
+            return
+        if self.recent_values['headers'] is None:
+            self.recent_values['headers'] = ['time', 'pv_generation', 'grid_import', 'ac_consumption']
+        self.recent_values['values'].append([record_time, pv_generation, grid_import, ac_consumption])
 
     def save_csv_line(self, record_time, pv_generation, grid_import):
         """
