@@ -256,5 +256,6 @@ def safe_json(obj):
     if obj is None:
         return ''
     if isinstance(obj, float) and math.isnan(obj):
-        return ''
+        # missing/invalid values are sent as null
+        return None
     return obj

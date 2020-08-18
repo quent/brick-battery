@@ -3,6 +3,7 @@ Shared functions and helpers.
 """
 
 import datetime
+from math import isnan
 
 def datetime_now():
     """
@@ -17,3 +18,12 @@ def datetime_now():
     local_tz = datetime.datetime.now(datetime.timezone.utc).astimezone().tzinfo
     now = datetime.datetime.now(local_tz)
     return now
+
+def empty_if_nan(value_or_nan):
+    """
+    Return an empty string if the value passed is not a number.
+    This is how missing values are encoded in CSV.
+    """
+    if isnan(value_or_nan):
+        return ''
+    return value_or_nan

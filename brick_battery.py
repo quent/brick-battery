@@ -12,16 +12,17 @@ fit within a pre-set import range.
 import asyncio
 import datetime
 import logging
-import math
 import traceback
 from collections import deque
+from functools import reduce
+from math import isnan
 from ruamel.yaml import YAML
 
 from battery_api import BrickBatteryHTTPServer
 from daikin_api import Aircon
 from solaredge_modbus_tcp import SolarInfo
 from csv_logger import CSVLogger
-import utils
+from utils import datetime_now, empty_if_nan
 
 LOGGER = logging.getLogger('brick_battery')
 
@@ -108,7 +109,7 @@ class BrickBatteryCharger:
         self.server.register_controller(self)
         self.last_updated = None
         self.last_set = None
-        self.csv_last_save = utils.datetime_now()
+        self.csv_last_save = datetime_now()
         self.is_sleep_mode = False
         self.recent_values = recent_values
 
@@ -126,7 +127,7 @@ class BrickBatteryCharger:
             self.solar.check_se_load(),
             *[unit.get_basic_info() for unit in self.ac],
             *self.get_load_ac_status_requests()))
-        now = utils.datetime_now()
+        now = datetime_now()
         self.last_updated = now
         if pv_generation <= self.config['sleep_threshold']:
             LOGGER.info('Inverter off, started in sleep mode')
@@ -172,12 +173,13 @@ class BrickBatteryCharger:
         Calculate the combined estimated consumption from all aircons.
         `Aircon.get_sensor_info()` must have been called first.
         """
-        total = 0
-        for unit in self.ac:
-            consumption = unit.get_consumption()
-            if not math.isnan(consumption):
-                total += consumption
-        self.ac_consumption = total
+        consumptions = list(filter(lambda x: not isnan(x),
+                                   map(lambda unit: unit.get_consumption(),
+                                       self.ac)))
+        if not consumptions:
+            self.ac_consumption = float('nan')
+        else:
+            self.ac_consumption = reduce(lambda x, y: x + y, consumptions)
 
     async def set_ac_controls(self, target):
         """
@@ -349,7 +351,7 @@ class BrickBatteryCharger:
         Target here is difference consumption wanted from AC
         Negative target to decrease consumption, positive to increase it
         """
-        if math.isnan(load) or math.isnan(consumption):
+        if isnan(load) or isnan(consumption):
             return float('NaN')
         if self.config['min_load'] < load < self.config['max_load']:
             # Don't bother touching a thing if importing within
@@ -378,12 +380,12 @@ class BrickBatteryCharger:
         - If not asleep, calculate target aircon consumption and
           set aircons controls for this target (only at set interval)
         """
-        start_step_time_string = utils.datetime_now().strftime("%d/%m/%Y %H:%M:%S")
+        start_step_time_string = datetime_now().strftime("%d/%m/%Y %H:%M:%S")
         LOGGER.info(start_step_time_string)
         [(grid_import, pv_generation), *_] = await asyncio.gather(
             self.solar.check_se_load(),
             *self.get_load_ac_status_requests())
-        now = utils.datetime_now()
+        now = datetime_now()
         self.last_updated = now
         if grid_import < 0:
             LOGGER.info('PV generating %.0fW Exporting %.0fW', pv_generation, -grid_import)
@@ -421,12 +423,12 @@ class BrickBatteryCharger:
                         target, self.config['min_load'], self.config['max_load'])
             if next_set > 0:
                 LOGGER.info('next set in %.0f seconds \n', next_set)
-            elif target != 0 and not math.isnan(target):
+            elif target != 0 and not isnan(target):
                 LOGGER.info('setting now\n')
             else:
                 LOGGER.info('setting anytime\n')
 
-            if next_set <= 0 and target != 0 and not math.isnan(target):
+            if next_set <= 0 and target != 0 and not isnan(target):
                 self.last_set = now
                 LOGGER.info("Setting A/C controls\n")
                 await self.set_ac_controls(target)
@@ -439,8 +441,10 @@ class BrickBatteryCharger:
         if self.recent_values is None:
             return
         if self.recent_values['headers'] is None:
-            self.recent_values['headers'] = ['time', 'pv_generation', 'grid_import', 'ac_consumption']
-        self.recent_values['values'].append([record_time, pv_generation, grid_import, ac_consumption])
+            self.recent_values['headers'] = \
+                ['time', 'pv_generation', 'grid_import', 'ac_consumption']
+        self.recent_values['values'].append(
+            [record_time, pv_generation, grid_import, ac_consumption])
 
     def save_csv_line(self, record_time, pv_generation, grid_import):
         """
@@ -451,10 +455,11 @@ class BrickBatteryCharger:
         if not self.csv:
             return
         # Make sure values match the order of csv_headers in config
+        # NaN are encoded as empty strings (missing values)
         self.csv.write([record_time.replace(microsecond=0).isoformat(),
-                        pv_generation,
-                        grid_import,
-                        self.ac_consumption,
+                        empty_if_nan(pv_generation),
+                        empty_if_nan(grid_import),
+                        empty_if_nan(self.ac_consumption),
                         self.ac[0].sensors.get('cmpfreq', ''),
                         self.ac[1].sensors.get('cmpfreq', ''),
                         self.ac[0].sensors.get('otemp', ''),
