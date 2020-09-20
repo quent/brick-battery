@@ -83,3 +83,8 @@ not always reliable and sometimes too laggy (>2/3min between refreshes), I
 found that I could fairly simply use the ModBus over TCP capability from the
 inverter and get all data from the LAN. This uses the SunSpec standard so it
 should be easy to use with any non-SolarEdge inverter.
+
+## User interface
+
+See the <a href="ui/readme.md">UI Readme page</a> for the A/C remote and BBC
+remote using simple Javascript web applications.

@@ -1,0 +1,201 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=yes">
+<title>Brick Battery Controller</title>
+<link rel="icon" href="favicon-bbc.png" type="image/png" sizes="64x64"/>
+<script src="deps/vue.js"></script>
+<link rel="stylesheet" href="deps/bootstrap.min.css">
+<link rel="stylesheet" href="bbc.css">
+<link rel="stylesheet" href="deps/ion.rangeSlider.min.css"/>
+<link rel="stylesheet" href="deps/dygraph.css"/>
+<script src="deps/jquery-3.4.1.slim.min.js"></script>
+<script src="deps/ion.rangeSlider.min.js"></script>
+<script src="deps/dygraph.min.js"></script>
+</head>
+<body>
+<div id="app">
+  <span class="fullscreen-button">
+    <!-- SVG fullscreen icons MIT License (MIT) Copyright (c) 2016 Dan Klammer -->
+    <svg v-on:click="enter_fullscreen()" id="fullscreen" xmlns="http://www.w3.org/2000/svg"
+         viewBox="0 0 32 32" width="32" height="32" fill="none" stroke="currentcolor"
+         stroke-linecap="round" stroke-linejoin="round" stroke-width="2">
+      <path d="M4 12 L4 4 12 4 M20 4 L28 4 28 12 M4 20 L4 28 12 28 M28 20 L28 28 20 28" />
+    </svg>
+    <svg v-on:click="exit_fullscreen()" id="fullscreen-exit" xmlns="http://www.w3.org/2000/svg"
+         viewBox="0 0 32 32" width="32" height="32" fill="none" stroke="currentcolor"
+         stroke-linecap="round" stroke-linejoin="round" stroke-width="2" class="hidden">
+      <path d="M4 12 L12 12 12 4 M20 4 L20 12 28 12 M4 20 L12 20 12 28 M28 20 L20 20 20 28" />
+    </svg>
+  </span>
+  <div class="container-fluid top-container">
+    <span>Last updated: {{ format_date(bbc.status.last_updated) }}{{ last_set_label }}</span>
+    <div class="row">
+      <div class="col" id="bbc-col1">
+        <h1>Brick Battery Controller<span id="dot" class="refresh-dot"></span></h1>
+        <div class="flow-diagram">
+          <div class="overlay-container d-flex justify-content-between">
+            <img src="pv.svg" class="flow-diagram-cell"/>
+            <img id="pv-to-house" src="arrow.svg" class="flow-diagram-cell"
+                 v-bind:class="{ sleep_mode: bbc.status.is_sleep_mode, idle: bbc.status.solar.pv_generation == 0 }"/>
+            <img src="house.svg" class="flow-diagram-cell"/>
+            <img id="house-to-grid" src="arrow.svg" class="flow-diagram-cell"
+                 v-bind:class="{ reversed: bbc.status.solar.grid_import > 0, idle: bbc.status.solar.grid_import == 0 }"/>
+            <img src="grid.svg" class="flow-diagram-cell"/>
+            <div class="overlay-content d-flex justify-content-between">
+              <img src="empty.svg" class="flow-diagram-cell">
+              <span class="arrow-label-horizontal">{{ generation_label }}</span>
+              <img src="empty.svg" class="flow-diagram-cell">
+              <span class="arrow-label-horizontal">{{ grid_label }}</span>
+              <img src="empty.svg" class="flow-diagram-cell">
+            </div>
+          </div>
+          <div class="overlay-container d-flex justify-content-center">
+            <img src="empty.svg" class="flow-diagram-cell"/>
+            <span class="outside-temp-label d-flex justify-content-end">{{ outside_temp_label }}</span>
+            <img id="house-to-ac" src="arrow.svg" class="flow-diagram-cell rotate-90"
+                 v-bind:class="{ idle: bbc.status.ac_consumption == 0 }"/>
+            <img src="empty.svg" class="flow-diagram-cell"/><img src="empty.svg" class="flow-diagram-cell"/>
+            <div class="overlay-content d-flex justify-content-center">
+              <img src="empty.svg" class="flow-diagram-cell"/><img src="empty.svg" class="flow-diagram-cell"/>
+              <span class="arrow-label-vertical">{{ ac_label }}</span>
+              <img src="empty.svg" class="flow-diagram-cell"/><img src="empty.svg" class="flow-diagram-cell"/>
+            </div>
+          </div>
+          <div class="d-flex justify-content-center align-items-center">
+            <span class="ac-icon-label">
+              <span class="d-flex justify-content-end" v-for="ac in bbc.status.aircons">
+                {{ ac.name }} {{ ac.cmpfreq }}Hz
+              </span>
+            </span>
+            <img src="ac.svg" class="flow-diagram-cell"/>
+            <span class="ac-icon-label">
+              <span class="d-flex justify-content-start" v-for="ac in bbc.status.aircons">
+                <span v-bind:class="{ sleep_mode: bbc.status.is_sleep_mode || !bbc.status.operation }">
+                  {{ ac.stemp }}ºC&nbsp;
+                </span>
+                <span v-bind:class="{ sleep_mode: bbc.status.is_sleep_mode || !bbc.status.operation }"
+                      v-if="bbc.controls.control_humidity">
+                   {{ ac.shum }}%
+                </span>
+                <span>({{ ac.htemp }}ºC)</span>
+              </span>
+            </span>
+          </div>
+        </div>
+        <div id="graph-legend" class="small"></div>
+        <div id="graph"></div>
+        <span v-for="(value, index) in bbc.status.solar.phase_import">
+          Phase {{ index + 1 }} {{ value > 0 ? "import" : "export" }}:
+          {{ Math.abs(Math.round(value)) }} W /
+          {{ Math.round(bbc.status.solar.phase_voltage[index]) }} V<br></span>
+        <span>Lifetime PV Generation:&nbsp;{{ format_energy(bbc.status.solar.lifetime_production) }}&nbsp;/
+              Import&nbsp;{{ format_energy(bbc.status.solar.lifetime_import) }}&nbsp;/
+              Export:&nbsp;{{ format_energy(bbc.status.solar.lifetime_export) }}</span>
+        <h2>Controls</h2>
+        <div class="align-items-center btn-toolbar mb-3">
+          <div class="button-group-with-label">
+            <span class="button-label">Operation</span>
+            <div class="btn-group m-2" id="operation">
+              <button type="button" class="btn btn-outline-danger off" v-on:click="bbc.set_operation(0)">OFF</button>
+              <button type="button" class="btn btn-outline-success on" v-on:click="bbc.set_operation(1)">ON</button>
+            </div>
+          </div>
+          <div class="button-group-with-label">
+            <span class="button-label">Max room temp.</span>
+            <div class="input-group m-2 temp-control">
+              <div class="input-group-prepend">
+                <button type="button" class="btn btn-outline-dark" v-on:click="bbc.max_htemp_minus()">-</button>
+              </div>
+              <input type="text" class="form-control input-number btn-outline-dark" v-model="bbc.controls.max_htemp"
+                     v-on:change="bbc.manual_edit()" v-on:focus="bbc.edit_focus()" v-on:blur="bbc.edit_blur()">
+              <div class="input-group-append">
+                <span class="input-group-text" style="">ºC</span>
+                <button type="button" class="btn btn-outline-dark" v-on:click="bbc.max_htemp_plus()">+</button>
+              </div>
+            </div>
+          </div>
+          <div class="button-group-with-label">
+            <span class="button-label">Control hum.</span>
+            <div class="btn-group m-2 zero-one" id="control-humidity">
+              <button type="button" class="btn btn-outline-dark off" v-on:click="bbc.set_control_humidity(0)">0</button>
+              <button type="button" class="btn btn-outline-dark on" v-on:click="bbc.set_control_humidity(1)">1</button>
+            </div>
+          </div>
+          <div class="button-group-with-label">
+            <span class="button-label">Max humidity</span>
+            <div class="input-group m-2 humidity-control">
+              <div class="input-group-prepend">
+                <button type="button" class="btn btn-outline-dark" v-on:click="bbc.shum_minus('max_shum')">-</button>
+              </div>
+              <input type="text" class="form-control input-number btn-outline-dark" v-model="bbc.controls.max_shum"
+                     v-on:change="bbc.manual_edit()" v-on:focus="bbc.edit_focus()" v-on:blur="bbc.edit_blur()">
+              <div class="input-group-append">
+                <span class="input-group-text" style="">%RH</span>
+                <button type="button" class="btn btn-outline-dark" v-on:click="bbc.shum_plus('max_shum')">+</button>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div>
+          <h3>Import control range</h3>
+          <div class="d-flex justify-content-between"><span>Allow less import</span><span>Allow more import</span></div>
+          <ion-range-slider ref="loadSlider" min="-500" max="500" v-bind:changed="load_slider_changed"></ion-range-slider>
+        </div>
+        <div>
+          <h3>Wake up / sleep thresholds</h3>
+          <div class="d-flex justify-content-between"><span>Sleep below</span><span>Wake up above</span></div>
+          <ion-range-slider ref="sleepSlider" min="0" max="1000" v-bind:changed="sleep_slider_changed"></ion-range-slider>
+        </div>
+        <div class="align-items-center btn-toolbar mb-3">
+          <h3>Sleep mode A/C settings</h3>
+          <div class="btn-toolbar mb-3">
+            <div class="btn-group m-2" id="sleep-power">
+                <button type="button" class="btn btn-outline-danger off" v-on:click="bbc.sleep_power(0)">OFF</button>
+                <button type="button" class="btn btn-outline-success on" v-on:click="bbc.sleep_power(1)">ON</button>
+            </div>
+            <div class="input-group m-2 temp-control">
+              <div class="input-group-prepend">
+                <button type="button" class="btn btn-outline-dark" v-on:click="bbc.sleep_stemp_minus()">-</button>
+              </div>
+              <input type="text" class="form-control input-number btn-outline-dark" v-model="bbc.controls.ac_sleep_stemp"
+                     v-on:change="bbc.manual_edit()" v-on:focus="bbc.edit_focus()" v-on:blur="bbc.edit_blur()">
+              <div class="input-group-append">
+                <span class="input-group-text" style="">ºC</span>
+                <button type="button" class="btn btn-outline-dark" v-on:click="bbc.sleep_stemp_plus()">+</button>
+              </div>
+            </div>
+            <div class="input-group m-2 humidity-control">
+              <div class="input-group-prepend">
+                <button type="button" class="btn btn-outline-dark" v-on:click="bbc.shum_minus('ac_sleep_shum')">-</button>
+              </div>
+              <input type="text" class="form-control input-number btn-outline-dark" v-model="bbc.controls.ac_sleep_shum"
+                     v-on:change="bbc.manual_edit()" v-on:focus="bbc.edit_focus()" v-on:blur="bbc.edit_blur()">
+              <div class="input-group-append">
+                <span class="input-group-text" style="">%RH</span>
+                <button type="button" class="btn btn-outline-dark" v-on:click="bbc.shum_plus('ac_sleep_shum')">+</button>
+              </div>
+            </div>
+          </div>
+          <div class="btn-group row m-2" id="mode">
+            <button type="button" class="btn btn-outline-dark" id="cool" v-on:click="bbc.sleep_set_mode('3')">COOL</button>
+            <button type="button" class="btn btn-outline-dark" id="heat" v-on:click="bbc.sleep_set_mode('4')">HEAT</button>
+            <button type="button" class="btn btn-outline-dark" id="auto" v-on:click="bbc.sleep_set_mode('1')">AUTO</button>
+            <button type="button" class="btn btn-outline-dark" id="fanonly" v-on:click="bbc.sleep_set_mode('6')">FAN&nbsp;ONLY</button>
+            <button type="button" class="btn btn-outline-dark" id="dry" v-on:click="bbc.sleep_set_mode('2')">DRY</button>
+            <button type="button" class="btn btn-outline-dark" id="humidify" v-on:click="bbc.sleep_set_mode('')">HUMIDIFY</button>
+          </div>
+        </div>
+        <div>
+          <h3>Set interval</h3>
+          <ion-range-slider ref="setIntervalSlider" type="single" min="10" max="120" step="5" grid_num="11" postfix=" s"
+                            v-bind:changed="set_interval_slider_changed"></ion-range-slider>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+<script src="bbc.js"></script>
+</body>
+</html>

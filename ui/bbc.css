@@ -1,0 +1,177 @@
+/* Remove hover on touchscreens, use active style instead upon button clicks */
+@media (hover: none) {
+  .btn:hover {
+    color: inherit;
+    background-color: inherit;
+  }
+}
+@font-face {
+  font-family: 'London';
+  src: url('deps/LondonMM.ttf') format('truetype');
+  /* London by François Bruel http://fbruel.com https://www.dafont.com/london-between.font */
+}
+body {
+  font-family: 'London', sans-serif;
+  font-size: 1.2rem;
+}
+h1 {
+  font-size: 1.8rem;
+  font-weight: bold;
+}
+h2 {
+  font-size: 1.6rem;
+  font-weight: bold;
+  margin-top: 1rem;
+}
+h3 {
+  font-size: 1.4rem;
+  font-weight: bold;
+}
+.flow-diagram {
+  margin-bottom: 1em;
+}
+img.flow-diagram-cell {
+  width: 100px;
+  max-width: 20%;
+  height: 100%;
+}
+div#graph-legend div {
+  display: inline-block;
+}
+div#graph {
+  height: 200px
+}
+.btn-group {
+  min-height: 2.6rem;
+}
+.btn, .input-group .input-number, .input-group .input-group-text {
+  padding-bottom: 0.2rem;
+  font-size: 1.2rem;
+}
+.input-group-prepend > .btn, .input-group-append > .btn, .zero-one > .btn {
+  width: 2.2em;
+}
+.input-group-prepend > .btn {
+  padding-bottom: 0.375rem;
+}
+#app .btn-success.active {
+  background-color: #28a745;
+  border-color: #28a745;
+}
+#app .btn-danger.active {
+  background-color: #dc3545;
+  border-color: #dc3545;
+}
+.input-group > input[type=text].input-number
+{
+  border-right: none;
+  padding-right: 0px;
+  text-align: right;
+}
+.input-group > .input-group-append > .input-group-text
+{
+  color: black;
+  background-color: white;
+  border-color: black;
+  border-left: none;
+  padding-left: 0.1em;
+}
+.input-group.temp-control {
+  width: 9.5rem;
+}
+.input-group.humidity-control {
+  width: 11rem;
+}
+.button-group-with-label {
+  float: left;
+}
+.button-label {
+  display: block;
+  text-align: center;
+}
+.button-group-with-label > .button-label + div {
+  margin-top: 0.1rem !important;
+}
+.column {
+  max-width: 320px;
+}
+.refresh-dot {
+  height: 0.3em;
+  width: 0.3em;
+  border-radius: 50%;
+  display: inline-block;
+}
+.pulse-green {
+  animation: pulse-green 1s;
+}
+.pulse-red {
+  animation: pulse-red 1s;
+}
+@keyframes pulse-green {
+    0% {background-color: rgba(40, 167, 69, 0.3);}
+   10% {background-color: rgba(40, 167, 69, 1.0);}
+  100% {background-color: rgba(40, 167, 69, 0.0);}
+}
+@keyframes pulse-red {
+    0% {background-color: rgba(220, 53, 69, 0.3);}
+   10% {background-color: rgba(220, 53, 69, 1.0);}
+  100% {background-color: rgba(220, 53, 69, 0.0);}
+}
+.hidden {
+  display: none !important;
+}
+span.fullscreen-button {
+  position: fixed;
+  top: 0;
+  right: 0;
+  margin-right: 1em;
+  margin-top: 1em;
+  z-index: 1;
+}
+.irs {
+  margin-bottom: 2rem;
+}
+span.irs-grid-pol.small {
+  display: none;
+}
+span.irs-grid-text {
+  font-size: 1em;
+}
+.overlay-container {
+  position: relative;
+}
+.overlay-content {
+  position: absolute;
+  width: 100%;
+}
+.arrow-label-horizontal {
+  width: 100px;
+  text-align: center;
+}
+.arrow-label-vertical {
+  width: 100px;
+  padding-left: 65px;
+  margin: auto 0;
+}
+.outside-temp-label {
+  width: 100px;
+}
+.ac-icon-label {
+  width: 200px;
+  text-align: center;
+}
+.ac-icon-label > span {
+  display: block !important;
+}
+.rotate-90 {
+  transform: rotate(90deg);
+}
+.reversed {
+  transform: rotate(180deg);
+}
+.sleep_mode {
+  opacity: 0.4;
+}
+.idle {
+  visibility: hidden;
+}
