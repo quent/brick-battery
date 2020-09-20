@@ -2,27 +2,36 @@
 
 ## Quick description
 
-A small piece of Python software to run heating harder at home when the sun
-shines.
+A piece of Python software to run heating harder at home when the sun
+shines, charging up bricks with heat.
+
+It runs Python for the controller and comes with a mobile friendly Web UI in Javascript for the monitoring and configuration.
+
+<img src="doc/ui-screenshot.jpg" alt="The Web UI featuring a power flow chart, a real-time last 30min generation/consumption chart and more" width="400"/>
+
+It helps achieve greater PV self-consumption and import less when grid power is more expensive in the evening, as shown below on the daily values graph:
+
+<img src="doc/self-consumption.jpg" alt="Graph of high self-consumption: only 3% of 13kWh generated are exported" width="400"/>
 
 ## Some software specs
 
-- Python3.5
+- Python3.5 or later
 - Implements a client for the SolarEdge API (to get power of inverter and grid
 net meter)
 - Implements a ModBus TCP SunSpec client as an alternative more reliable way to
 poll the inverter from the LAN
-- Implements a client for the Daikin API
+- Implements a client for the Daikin API to monitor and control A/C units
 - Runs a poll loop every 3 seconds to check grid import/export
 and aircon consumptions
-- Adjusts every minute if needed the aircon control settings to
-land the grid import/export value within the pre-defined target
-window. This gives enough time for the aircon compressors
+- Adjusts every preset interval if needed the aircon control settings to
+get the grid import/export value fall within the pre-defined target.
+This gives enough time for the aircon compressors
 to adjust their running regime.
 - Logs sensors and controls to know what is going on during the system operation
 - Has a sleep mode setting for the aircons to operate in when PV generation has
 stopped for the day
-- Polls APIs asynchronously (concurrently)
+- Polls all APIs asynchronously (concurrently)
+- Provides its own API used by the web UI to monitor usage and configure settings
 
 ## The physical setup:
 - Canberra climate: cold winters but sunny and relatively warm days with cool
@@ -48,9 +57,9 @@ But electric batteries are still a bit expensive (at least in 2019).
 This is particularly prevalent in winter when PV generation is limited but
 heating needs are high.
 Luckily I have the following playing on my side:
-- I can monitor in real-time instantaneous power of PV generation and grid
+- Can monitor in real-time instantaneous power of PV generation and grid
 import/export
-- I can command settings and quite accurately estimate power consumption of the
+- Can command settings and quite accurately estimate power consumption of the
 2 inverter-based air-conditioning systems used to heat up the house
 - The house itself has a high thermal mass as all the inner walls are made of
 solid brick
