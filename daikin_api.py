@@ -41,6 +41,7 @@ class Aircon:
     def __init__(self, num, host):
         self.num = num
         self.name = 'aircon' + str(num)
+        self.name_set = False
         self.host = host
         self.sensors = {}
         self.info = {}
@@ -142,6 +143,7 @@ class Aircon:
         self.info = await self.api_get('/common/basic_info')
         if 'name' in self.info:
             self.name = urllib.parse.unquote(self.info['name'])
+            self.name_set = True
 
     def get_consumption(self):
         """

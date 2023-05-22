@@ -166,6 +166,8 @@ class BrickBatteryCharger:
         for unit in self.ac:
             requests.append(unit.get_sensor_info())
             requests.append(unit.get_control_info())
+            if not unit.name_set:
+                requests.append(unit.get_basic_info())
         return requests
 
     def estimate_ac_consumption(self):
