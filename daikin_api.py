@@ -3,6 +3,7 @@ Module for the Daikin BRP072A42 WiFi Control unit API
 This module controls one split air conditioning unit.
 """
 
+import datetime
 import math
 import logging
 import urllib.parse
@@ -45,6 +46,7 @@ class Aircon:
         self.host = host
         self.sensors = {}
         self.info = {}
+        self.datetime = {}
         self.controls = {}
         self.command_to_send = False
         self._session = None
@@ -144,6 +146,49 @@ class Aircon:
         if 'name' in self.info:
             self.name = urllib.parse.unquote(self.info['name'])
             self.name_set = True
+
+    async def check_set_time(self):
+        """
+        Check if the time of the ac module is set.
+        If it is not, just set it using the current UTC system time.
+        """
+        await self.get_datetime()
+        if 'cur' in self.datetime and self.datetime['cur'] == '-':
+            await self.set_datetime()
+
+    async def get_datetime(self):
+        """
+        Load date/time and time zone information.
+        e.g.: sta=1,cur=2024/4/10 13:33:7,reg=th,dst=1,zone=345
+        Expect cur=- if the wifi module rebooted or got switched between access
+        point and run modes after locking up.
+        sta (?), reg (region?), dst (daylight savings mode?) and zone (id of
+        the time zone) are persistent.
+        """
+        self.datetime = await self.api_get('/common/get_datetime')
+
+    async def set_datetime(self):
+        """
+        Send a command to the aircon to update its current date and time.
+        After a reboot or switch between access point and run mode,
+        the current time will be lost and needs to be set so that the
+        configured aircon schedules can run at the expected times.
+        e.g.: notify_date_time?date=2024/04/10&time=3:33:00&zone=GMT
+        The time zone information is assumed to be already set and
+        is not changed.
+        """
+        now_utc = datetime.datetime.now(datetime.timezone.utc)
+        date_time = {
+            'date': now_utc.strftime("%Y/%m/%d"),
+            'time': now_utc.strftime("%H:%M:%S"),
+            'zone': 'GMT'
+        }
+        LOGGER.info('Setting date and time of %s wifi controller to %s %s %s',
+                    self.name,
+                    date_time['date'],
+                    date_time['time'],
+                    date_time['zone'])
+        return await self.api_set('/common/notify_date_time', date_time)
 
     def get_consumption(self):
         """

@@ -109,6 +109,7 @@ class BrickBatteryCharger:
         self.server.register_controller(self)
         self.last_updated = None
         self.last_set = None
+        self.last_check_set_time = None
         self.csv_last_save = datetime_now()
         self.is_sleep_mode = False
         self.recent_values = recent_values
@@ -163,6 +164,19 @@ class BrickBatteryCharger:
         awaited
         """
         requests = []
+
+        # First see when we last verified that the aircon modules had their time checked last.
+        # Add a check and set time if it was too long ago.
+        now = datetime_now()
+        if self.config['ac_check_set_time_interval'] and \
+                (not self.last_check_set_time \
+                or (now > self.last_check_set_time +
+                datetime.timedelta(seconds=self.config['ac_check_set_time_interval']))):
+            self.last_check_set_time = now
+            for unit in self.ac:
+                requests.append(unit.check_set_time())
+
+        # Now add sensors and controls
         for unit in self.ac:
             requests.append(unit.get_sensor_info())
             requests.append(unit.get_control_info())

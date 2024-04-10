@@ -78,6 +78,12 @@ listen:
 recent_values:
   max_size: 600
 
+# Optional interval in seconds between checks that the Daikin wifi modules have
+# their time set. This is useful if the modules do not connect to the Internet
+# and may lose their time after a reboot of power failure.
+# Note that this does not try to adjust the time of wifi modules if it was already set.
+ac_check_set_time_interval: 600
+
 # Name of CSV data file to log data to. Leave empty if no CSV logging required
 csv_file: energy_data.csv
 
