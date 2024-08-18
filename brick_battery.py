@@ -26,7 +26,7 @@ from utils import datetime_now, empty_if_nan
 
 LOGGER = logging.getLogger('brick_battery')
 
-def main():
+async def main():
     """
     Initialise SolarInfo, Aircon and CSVLogger instances with all settings for
     target grid import (or export) range, read frequency, aircon set frequency,
@@ -66,7 +66,7 @@ def main():
                                                             config_file),
                               csv=csv_logger,
                               recent_values=recent_values)
-    bbc.charge()
+    await bbc.charge()
 
 class BrickBatteryCharger:
     """
@@ -114,20 +114,19 @@ class BrickBatteryCharger:
         self.is_sleep_mode = False
         self.recent_values = recent_values
 
-    def charge(self):
+    async def charge(self):
         """
         Set up the event loop for the async API polls, do a first poll,
         then run the main loop (using the event loop...)
         """
-        loop = asyncio.get_event_loop()
         if not self.config['operation']:
             LOGGER.warning('Operation mode off: not sending any commands to aircons')
         if self.csv:
             LOGGER.info('Logging runtime analytics to %s', self.csv.file.name)
-        [(_, pv_generation), *_] = loop.run_until_complete(asyncio.gather(
+        [(_, pv_generation), *_] = await asyncio.gather(
             self.solar.check_se_load(),
             *[unit.get_basic_info() for unit in self.ac],
-            *self.get_load_ac_status_requests()))
+            *self.get_load_ac_status_requests())
         now = datetime_now()
         self.last_updated = now
         if pv_generation <= self.config['sleep_threshold']:
@@ -139,10 +138,10 @@ class BrickBatteryCharger:
                 seconds=self.config['set_interval'] - 3 * self.config['read_interval'])
         for unit in self.ac:
             LOGGER.info(unit)
-        loop.run_until_complete(self.server.start())
-        loop.run_until_complete(self.main_loop())
+        await self.server.start()
+        await self.run_main_loop()
 
-    async def main_loop(self):
+    async def run_main_loop(self):
         """
         Run forever the poll SolarInfo and Aircon to see what need to be done.
         The wait is done in parallel so that if the read (and possibly set step)
@@ -176,12 +175,12 @@ class BrickBatteryCharger:
             for unit in self.ac:
                 requests.append(unit.check_set_time())
 
-        # Now add sensors and controls
+        # Now add sensors and controls and potentially basic info
         for unit in self.ac:
-            requests.append(unit.get_sensor_info())
-            requests.append(unit.get_control_info())
+            unit_requests = [unit.get_sensor_info(), unit.get_control_info()]
             if not unit.name_set:
-                requests.append(unit.get_basic_info())
+                unit_requests.append(unit.get_basic_info())
+            requests.extend(unit_requests)
         return requests
 
     def estimate_ac_consumption(self):
@@ -492,4 +491,4 @@ class BrickBatteryCharger:
             self.csv.save()
 
 if __name__ == '__main__':
-    main()
+    asyncio.run(main())

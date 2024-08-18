@@ -15,7 +15,7 @@ It helps achieve greater PV self-consumption and import less when grid power is 
 
 ## Some software specs
 
-- Python3.5 or later
+- Tested on Python3.12
 - Implements a client for the SolarEdge API (to get power of inverter and grid
 net meter)
 - Implements a ModBus TCP SunSpec client as an alternative more reliable way to
